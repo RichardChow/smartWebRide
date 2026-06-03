@@ -1,0 +1,155 @@
+{
+  "generatedAt": "2026-06-03T00:00:00.000Z",
+  "projects": [
+    {
+      "id": "sample-robot",
+      "name": "Sample Robot Project",
+      "root": "sample_data/robot",
+      "description": "Public sample data for smartWebRide.",
+      "recentOpened": "2026-06-03T00:00:00.000Z",
+      "tree": {
+        "id": "sample-robot:.",
+        "name": "sample_data",
+        "path": "",
+        "kind": "directory",
+        "extension": "",
+        "size": 0,
+        "children": [
+          {
+            "id": "sample-robot:tests",
+            "name": "tests",
+            "path": "tests",
+            "kind": "directory",
+            "extension": "",
+            "size": 0,
+            "children": [
+              {
+                "id": "sample-robot:tests/network.robot",
+                "name": "network.robot",
+                "path": "tests/network.robot",
+                "kind": "robot",
+                "extension": ".robot",
+                "size": 430,
+                "children": []
+              }
+            ]
+          },
+          {
+            "id": "sample-robot:resources",
+            "name": "resources",
+            "path": "resources",
+            "kind": "directory",
+            "extension": "",
+            "size": 0,
+            "children": [
+              {
+                "id": "sample-robot:resources/common.resource",
+                "name": "common.resource",
+                "path": "resources/common.resource",
+                "kind": "resource",
+                "extension": ".resource",
+                "size": 156,
+                "children": []
+              }
+            ]
+          }
+        ]
+      },
+      "fileStats": {
+        ".robot": 1,
+        ".resource": 1
+      },
+      "totalSize": 586,
+      "totalFiles": 2,
+      "totalRobotFiles": 1,
+      "totalResourceFiles": 1,
+      "totalCases": 2,
+      "robotFiles": [
+        "tests/network.robot"
+      ],
+      "resourceFiles": [
+        "resources/common.resource"
+      ],
+      "cases": [
+        {
+          "id": "sample-robot:tests/network.robot:8",
+          "projectId": "sample-robot",
+          "name": "IPv4 Smoke",
+          "filePath": "tests/network.robot",
+          "suiteName": "network",
+          "tags": [
+            "ipv4",
+            "smoke"
+          ],
+          "documentation": "Verify the sample IPv4 debug path.",
+          "steps": [
+            "Log    Starting IPv4 smoke",
+            "IF    ${ipv4_ready}",
+            "    Log    IPv4 ready",
+            "END",
+            "Remove Tags    temporary"
+          ],
+          "line": 8
+        },
+        {
+          "id": "sample-robot:tests/network.robot:18",
+          "projectId": "sample-robot",
+          "name": "Argument File Preview",
+          "filePath": "tests/network.robot",
+          "suiteName": "network",
+          "tags": [
+            "argumentfile",
+            "smoke"
+          ],
+          "documentation": "Exercise robot -A argument file previews.",
+          "steps": [
+            "FOR    ${item}    IN    @{items}",
+            "    Log    ${item}",
+            "END"
+          ],
+          "line": 18
+        }
+      ],
+      "fileOutlines": {
+        "tests/network.robot": {
+          "sections": [
+            {
+              "name": "Settings",
+              "line": 1
+            },
+            {
+              "name": "Variables",
+              "line": 5
+            },
+            {
+              "name": "Test Cases",
+              "line": 7
+            }
+          ],
+          "resources": [
+            "../resources/common.resource"
+          ],
+          "libraries": [
+            "BuiltIn"
+          ],
+          "forceTags": []
+        },
+        "resources/common.resource": {
+          "sections": [
+            {
+              "name": "Keywords",
+              "line": 1
+            }
+          ],
+          "resources": [],
+          "libraries": [],
+          "forceTags": []
+        }
+      },
+      "fileContents": {
+        "tests/network.robot": "*** Settings ***\nLibrary    BuiltIn\nResource    ../resources/common.resource\n\n*** Variables ***\n${ipv4_ready}    ${True}\n\n*** Test Cases ***\nIPv4 Smoke\n    [Documentation]    Verify the sample IPv4 debug path.\n    [Tags]    ipv4    smoke\n    Log    Starting IPv4 smoke\n    IF    ${ipv4_ready}\n        Log    IPv4 ready\n    END\n    Remove Tags    temporary\n\nArgument File Preview\n    [Documentation]    Exercise robot -A argument file previews.\n    [Tags]    argumentfile    smoke\n    FOR    ${item}    IN    @{items}\n        Log    ${item}\n    END\n",
+        "resources/common.resource": "*** Keywords ***\nPrepare Sample Host\n    [Arguments]    ${host}\n    Log    Preparing ${host}\n"
+      }
+    }
+  ]
+}
