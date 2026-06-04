@@ -112,8 +112,6 @@ export function App() {
 
   async function releaseSlaveLock(slaveId: string) {
     const session = slaveSessions.find((item) => item.slaveId === slaveId);
-    if (!session || session.holder !== currentUser) return;
-
     if (activeSlaveId === slaveId) {
       setReleaseNonce((value) => value + 1);
       setReadOnlyMode(false);
@@ -123,10 +121,16 @@ export function App() {
     try {
       const releasedSession = await releaseSlave(slaveId, currentUser);
       updateSlaveSession(releasedSession);
-      setCenterStatus(`${session.name} 已释放，其他人可以连接调试。`);
+      setCenterStatus(`${session?.name || slaveId} 已释放，其他人可以连接调试。`);
     } catch (err) {
       const message = err instanceof Error ? err.message : String(err);
-      setCenterStatus(`释放 ${session.name} 失败：${message}`);
+      setCenterStatus(`释放 ${session?.name || slaveId} 失败：${message}`);
+      try {
+        const liveSessions = await listSlaves();
+        setSlaveSessions(liveSessions);
+      } catch {
+        // 保留原错误文案，避免用刷新失败覆盖真正的释放失败。
+      }
     }
   }
 

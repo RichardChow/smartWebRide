@@ -120,6 +120,18 @@ class SlaveRegistryTest(unittest.TestCase):
         self.assertEqual(slave.processSignal, "robot")
         self.assertEqual(slave.activeRunId, "999")
 
+    def test_update_activity_sets_running_while_preserving_holder(self):
+        registry = SlaveRegistry()
+        registry.mark_agent_online("vm1", "test-agent")
+        registry.lock("vm1", "Humphrey")
+
+        registry.update_activity("vm1", True, "999")
+
+        slave = registry.get("vm1")
+        self.assertEqual(slave.mode, "running")
+        self.assertEqual(slave.holder, "Humphrey")
+        self.assertEqual(slave.processSignal, "robot")
+
     def test_lock_rejects_when_agent_offline(self):
         registry = SlaveRegistry()
         with self.assertRaises(ValueError):

@@ -12,15 +12,36 @@ const apiMocks = vi.hoisted(() => ({
 vi.mock('./lib/terminalApi', () => apiMocks);
 
 vi.mock('./components/SlaveStatusHome', () => ({
-  SlaveStatusHome: ({ onForceTakeover }: { onForceTakeover: (slaveId: string, reason: string) => void }) => (
-    <button onClick={() => onForceTakeover('vm1', '紧急调试')}>强制接管</button>
+  SlaveStatusHome: ({
+    onEnterSlave,
+    onForceTakeover,
+    onReleaseSlave
+  }: {
+    onEnterSlave: (slaveId: string, readOnly: boolean) => void;
+    onForceTakeover: (slaveId: string, reason: string) => void;
+    onReleaseSlave: (slaveId: string) => void;
+  }) => (
+    <div>
+      <button onClick={() => onEnterSlave('vm1', false)}>进入终端</button>
+      <button onClick={() => onReleaseSlave('vm1')}>释放 Slave</button>
+      <button onClick={() => onForceTakeover('vm1', '紧急调试')}>强制接管</button>
+    </div>
   )
 }));
 
 vi.mock('./components/TerminalView', () => ({
-  TerminalView: ({ forceReadOnly, slaveSession }: { forceReadOnly?: boolean; slaveSession: { holder: string } | null }) => (
+  TerminalView: ({
+    forceReadOnly,
+    onReleaseSlave,
+    slaveSession
+  }: {
+    forceReadOnly?: boolean;
+    onReleaseSlave: () => void;
+    slaveSession: { holder: string } | null;
+  }) => (
     <div data-testid="terminal-view" data-holder={slaveSession?.holder || ''} data-readonly={String(Boolean(forceReadOnly))}>
       {forceReadOnly ? '只读观察' : '可写调试'}
+      <button onClick={onReleaseSlave}>终端释放</button>
     </div>
   )
 }));
@@ -79,5 +100,23 @@ describe('App takeover flow', () => {
     });
     expect(screen.getByTestId('terminal-view')).toHaveAttribute('data-holder', 'Humphrey');
     expect(apiMocks.forceTakeover).toHaveBeenCalledWith('vm1', 'Humphrey', '紧急调试');
+  });
+
+  it('returns to the slave list when releasing from terminal', async () => {
+    const heldByCurrentUser = makeSlave({ holder: 'Humphrey' });
+    const released = makeSlave({ mode: 'idle', holder: '', expiresAt: '', manualHoldReason: '' });
+    apiMocks.listSlaves.mockResolvedValue([heldByCurrentUser]);
+    apiMocks.releaseSlave.mockResolvedValue(released);
+
+    render(<App />);
+
+    fireEvent.click(await screen.findByRole('button', { name: '进入终端' }));
+    await screen.findByTestId('terminal-view');
+    fireEvent.click(screen.getByRole('button', { name: '终端释放' }));
+
+    await waitFor(() => {
+      expect(screen.getByTestId('terminal-view').parentElement).toHaveStyle({ display: 'none' });
+    });
+    expect(apiMocks.releaseSlave).toHaveBeenCalledWith('vm1', 'Humphrey');
   });
 });

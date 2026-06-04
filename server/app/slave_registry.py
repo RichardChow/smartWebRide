@@ -85,10 +85,10 @@ class SlaveRegistry:
     def _recompute_mode(self, slave: SlaveInfo) -> None:
         if not slave.agentVersion:
             slave.mode = "offline"
-        elif slave.holder:
-            slave.mode = "held"
         elif slave.processSignal != "none":
             slave.mode = "running"
+        elif slave.holder:
+            slave.mode = "held"
         else:
             slave.mode = "idle"
 
