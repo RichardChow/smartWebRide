@@ -18,6 +18,7 @@ if os.name != "nt":
 
 
 OutputCallback = Callable[[str, str], Awaitable[None]]
+CwdCallback = Callable[[str, str], Awaitable[None]]
 
 
 BASH_RC_TEMPLATE = r'''# smartWebRide interactive terminal bootstrap.
@@ -258,11 +259,13 @@ class PtySession:
     reader_task: asyncio.Task
     master_fd: int | None = None
     highlighter: TerminalAnsiHighlighter | None = None
+    cwd: str = ""
 
 
 class PtyService:
-    def __init__(self, on_output: OutputCallback) -> None:
+    def __init__(self, on_output: OutputCallback, on_cwd: CwdCallback | None = None) -> None:
         self.on_output = on_output
+        self.on_cwd = on_cwd
         self.sessions: dict[str, PtySession] = {}
 
     async def open(self, shell: str, cwd: str, argv: list[str] | None = None) -> str:
@@ -281,7 +284,7 @@ class PtyService:
                 env=env,
             )
             task = asyncio.create_task(self._read_pipe_loop(session_id, process))
-            self.sessions[session_id] = PtySession(session_id, process, task)
+            self.sessions[session_id] = PtySession(session_id, process, task, cwd=cwd_path)
         else:
             master_fd, slave_fd = os.openpty()
 
@@ -302,7 +305,8 @@ class PtyService:
             )
             os.close(slave_fd)
             task = asyncio.create_task(self._read_pty_loop(session_id, master_fd))
-            self.sessions[session_id] = PtySession(session_id, process, task, master_fd, TerminalAnsiHighlighter())
+            self.sessions[session_id] = PtySession(session_id, process, task, master_fd, TerminalAnsiHighlighter(), cwd_path)
+        await self.emit_cwd(session_id)
         return session_id
 
     def _build_command(self, shell: str, argv: list[str] | None) -> list[str]:
@@ -343,6 +347,29 @@ class PtyService:
         elif session.process.stdin:
             session.process.stdin.write(data.encode("utf-8", errors="ignore"))
             session.process.stdin.flush()
+        if "\n" in data or "\r" in data:
+            asyncio.create_task(self._emit_cwd_after_prompt(session_id))
+
+    async def _emit_cwd_after_prompt(self, session_id: str) -> None:
+        await asyncio.sleep(0.12)
+        await self.emit_cwd(session_id)
+
+    async def emit_cwd(self, session_id: str) -> None:
+        if not self.on_cwd:
+            return
+        session = self.sessions.get(session_id)
+        if not session:
+            return
+        cwd = session.cwd
+        if os.name != "nt":
+            try:
+                cwd = os.readlink(f"/proc/{session.process.pid}/cwd")
+            except (OSError, PermissionError):
+                cwd = session.cwd
+        if cwd and cwd != session.cwd:
+            session.cwd = cwd
+        if cwd:
+            await self.on_cwd(session_id, cwd)
 
     async def resize(self, session_id: str, cols: int, rows: int) -> None:
         session = self.sessions[session_id]

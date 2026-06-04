@@ -23,7 +23,7 @@ class SmartWebRideAgent:
         self.websocket = None
         self.send_lock = asyncio.Lock()
         self.file_service = FileService(roots)
-        self.pty_service = PtyService(self.send_terminal_output)
+        self.pty_service = PtyService(self.send_terminal_output, self.send_terminal_cwd)
         self.activity_service = ActivityService(roots)
 
     async def run_forever(self) -> None:
@@ -91,6 +91,12 @@ class SmartWebRideAgent:
             return
         async with self.send_lock:
             await self.websocket.send(json.dumps({"type": "terminal.output", "sessionId": session_id, "data": data}))
+
+    async def send_terminal_cwd(self, session_id: str, cwd: str) -> None:
+        if not self.websocket:
+            return
+        async with self.send_lock:
+            await self.websocket.send(json.dumps({"type": "terminal.cwd", "sessionId": session_id, "cwd": cwd}))
 
 
 def parse_args() -> argparse.Namespace:
