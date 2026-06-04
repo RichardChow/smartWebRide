@@ -3,12 +3,16 @@ from __future__ import annotations
 import asyncio
 import json
 import uuid
+import time
+from collections import deque
 from dataclasses import dataclass, field
 
 from fastapi import WebSocket
 
 
 TerminalQueueItem = dict[str, str]
+TERMINAL_HISTORY_MAX_CHUNKS = 5_000
+TERMINAL_HISTORY_MAX_BYTES = 2 * 1024 * 1024
 
 
 def build_terminal_argv(shell: str) -> list[str]:
@@ -30,6 +34,31 @@ class TerminalSession:
     shell: str
     holder: str = ""
     output_queues: set[asyncio.Queue[TerminalQueueItem]] = field(default_factory=set)
+    created_at: float = field(default_factory=time.time)
+    last_attached_at: float = 0.0
+    last_detached_at: float = 0.0
+    output_history: deque[TerminalQueueItem] = field(default_factory=deque)
+    output_history_bytes: int = 0
+
+    def mark_attached(self) -> None:
+        self.last_attached_at = time.time()
+
+    def mark_detached(self) -> None:
+        self.last_detached_at = time.time()
+
+    def append_history(self, event: TerminalQueueItem) -> None:
+        if event.get("type") not in {"output", "cwd"}:
+            return
+        item = dict(event)
+        size = sum(len(value.encode("utf-8", errors="ignore")) for value in item.values())
+        self.output_history.append(item)
+        self.output_history_bytes += size
+        while len(self.output_history) > TERMINAL_HISTORY_MAX_CHUNKS or self.output_history_bytes > TERMINAL_HISTORY_MAX_BYTES:
+            removed = self.output_history.popleft()
+            self.output_history_bytes -= sum(len(value.encode("utf-8", errors="ignore")) for value in removed.values())
+
+    def history_snapshot(self) -> list[TerminalQueueItem]:
+        return [dict(event) for event in self.output_history]
 
 
 class AgentConnection:
@@ -104,8 +133,24 @@ class AgentHub:
             if not session:
                 return
             output = str(data.get("data", ""))
+            event = {"type": "output", "data": output}
+            session.append_history(event)
             for queue in list(session.output_queues):
-                await queue.put({"type": "output", "data": output})
+                await queue.put(event)
+            return
+        if message_type == "terminal.cwd":
+            agent_session_id = str(data.get("sessionId", ""))
+            session_id = connection.agent_to_center_session.get(agent_session_id)
+            if not session_id:
+                return
+            session = self._sessions.get(session_id)
+            if not session:
+                return
+            cwd = str(data.get("cwd", ""))
+            event = {"type": "cwd", "data": cwd}
+            session.append_history(event)
+            for queue in list(session.output_queues):
+                await queue.put(event)
 
     async def create_terminal_session(self, slave_id: str, shell: str, cwd: str, holder: str = "") -> TerminalSession:
         agent = self._require_agent(slave_id)
@@ -120,6 +165,19 @@ class AgentHub:
 
     def get_terminal_session(self, session_id: str) -> TerminalSession | None:
         return self._sessions.get(session_id)
+
+    def find_reusable_terminal_session(self, slave_id: str, holder: str) -> TerminalSession | None:
+        if not holder:
+            return None
+        candidates = [
+            session
+            for session in self._sessions.values()
+            if session.slave_id == slave_id and session.holder == holder
+        ]
+        return max(candidates, key=lambda session: session.created_at, default=None)
+
+    def list_terminal_sessions(self) -> list[TerminalSession]:
+        return list(self._sessions.values())
 
     async def terminal_input(self, session_id: str, data: str) -> None:
         session = self._require_session(session_id)

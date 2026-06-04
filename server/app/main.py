@@ -49,6 +49,15 @@ async def list_slaves() -> list[SlaveInfo]:
     return registry.list_slaves()
 
 
+async def _refresh_slave_activity(slave_id: str) -> SlaveInfo | None:
+    try:
+        result = await hub.activity_request(slave_id) if hub.is_online(slave_id) else {"robotRunning": False}
+    except Exception:
+        result = {"robotRunning": False}
+    registry.update_activity(slave_id, bool(result.get("robotRunning")), str(result.get("runId", "")))
+    return registry.get(slave_id)
+
+
 @app.post("/api/slaves/{slave_id}/lock", response_model=SlaveInfo)
 async def lock_slave(slave_id: str, request: LockRequest) -> SlaveInfo:
     try:
@@ -114,6 +123,9 @@ async def create_terminal_session(slave_id: str, holder: str = Query(...)) -> Te
         raise HTTPException(status_code=503, detail="agent offline")
     if not registry.can_write(slave_id, holder):
         raise HTTPException(status_code=409, detail=f"slave is held by {slave.holder or 'another user'}")
+    session = hub.find_reusable_terminal_session(slave_id, holder)
+    if session:
+        return TerminalSessionResponse(id=session.session_id, slaveId=slave_id, shell=session.shell, readOnly=False)
     shell = "powershell.exe" if "windows" in slave.system.lower() else "/bin/bash"
     cwd = default_terminal_cwd(slave.allowedRoots)
     try:
@@ -138,7 +150,10 @@ async def terminal_ws(websocket: WebSocket, session_id: str) -> None:
         await websocket.close()
         return
     queue: "asyncio.Queue[dict[str, str]]" = asyncio.Queue()
+    for event in session.history_snapshot():
+        queue.put_nowait(event)
     session.output_queues.add(queue)
+    session.mark_attached()
 
     async def pump_output() -> None:
         while True:
@@ -147,16 +162,12 @@ async def terminal_ws(websocket: WebSocket, session_id: str) -> None:
                 await websocket.send_json({"type": "closed", "message": event.get("message", "terminal session closed")})
                 await websocket.close()
                 break
+            if event.get("type") == "cwd":
+                await websocket.send_json({"type": "cwd", "data": event.get("data", "")})
+                continue
             await websocket.send_json({"type": "output", "data": event.get("data", "")})
 
-    async def renew_lock() -> None:
-        # 终端 WS 活跃才续租：连接期间持续推后锁过期，断开即停 → 过 TTL 自动空闲（Q2）。
-        while True:
-            registry.renew(session.slave_id, session.holder)
-            await asyncio.sleep(LOCK_RENEW_INTERVAL)
-
     output_task = asyncio.create_task(pump_output())
-    renew_task = asyncio.create_task(renew_lock())
     try:
         while True:
             raw = await websocket.receive_text()
@@ -180,8 +191,8 @@ async def terminal_ws(websocket: WebSocket, session_id: str) -> None:
         pass
     finally:
         output_task.cancel()
-        renew_task.cancel()
         session.output_queues.discard(queue)
+        session.mark_detached()
 
 
 @app.get("/api/slaves/{slave_id}/files", response_model=FileListResponse)
@@ -239,11 +250,7 @@ async def agent_connect(websocket: WebSocket, slave_id: str, version: str = Quer
 
 async def _poll_activity_once() -> None:
     for slave_id in hub.online_slave_ids():
-        try:
-            result = await hub.activity_request(slave_id)
-        except Exception:
-            result = {"robotRunning": False}
-        registry.update_activity(slave_id, bool(result.get("robotRunning")), str(result.get("runId", "")))
+        await _refresh_slave_activity(slave_id)
 
 
 async def _activity_poll_loop() -> None:
@@ -252,6 +259,15 @@ async def _activity_poll_loop() -> None:
         await asyncio.sleep(ACTIVITY_POLL_INTERVAL)
 
 
+async def _terminal_session_renew_loop() -> None:
+    while True:
+        for session in hub.list_terminal_sessions():
+            if session.holder:
+                registry.renew(session.slave_id, session.holder)
+        await asyncio.sleep(LOCK_RENEW_INTERVAL)
+
+
 @app.on_event("startup")
 async def _start_background_tasks() -> None:
     asyncio.create_task(_activity_poll_loop())
+    asyncio.create_task(_terminal_session_renew_loop())
