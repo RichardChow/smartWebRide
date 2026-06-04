@@ -4,6 +4,7 @@ import { WebLinksAddon } from '@xterm/addon-web-links';
 import { Terminal } from '@xterm/xterm';
 import { ArrowLeft, FolderOpen, LogOut, Plus, RotateCw, Server, TerminalSquare, X } from 'lucide-react';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import type { CSSProperties, KeyboardEvent as ReactKeyboardEvent, PointerEvent as ReactPointerEvent } from 'react';
 import { RemoteFileEditor } from './RemoteFileEditor';
 import { SftpSidebar } from './SftpSidebar';
 import {
@@ -67,11 +68,14 @@ function getDefaultRoot(roots: string[]): string {
   }) ?? roots[0] ?? '/';
 }
 
+const EMPTY_SPLIT_FILE = '__swr_empty_split__';
+
 export function TerminalView({ slaveSession, currentUser, forceReadOnly = false, active = true, releaseNonce = 0, onBack, onSessionClosed, onReleaseSlave }: TerminalViewProps) {
   const readOnly = useMemo(() => forceReadOnly || isTerminalReadOnly(slaveSession, currentUser), [forceReadOnly, slaveSession, currentUser]);
   const [tab, setTab] = useState<TerminalTab | null>(null);
   const [connectionError, setConnectionError] = useState('');
   const [resolving, setResolving] = useState(false);
+  const [splitRequestNonce, setSplitRequestNonce] = useState(0);
 
   const handleTerminalStatusChange = useCallback((status: TerminalTab['status']) => {
     setTab((current) => current ? { ...current, status } : current);
@@ -81,7 +85,17 @@ export function TerminalView({ slaveSession, currentUser, forceReadOnly = false,
     if (!tab) return;
     void closeTerminalSession(tab.sessionId).catch(() => undefined);
     setTab(null);
+    setConnectionError('');
+    setResolving(false);
   }, [releaseNonce]);
+
+  useEffect(() => {
+    if (!slaveSession || !tab || tab.slaveId === slaveSession.slaveId) return;
+    void closeTerminalSession(tab.sessionId).catch(() => undefined);
+    setTab(null);
+    setConnectionError('');
+    setResolving(false);
+  }, [slaveSession?.slaveId, tab?.sessionId, tab?.slaveId]);
 
   useEffect(() => {
     if (!slaveSession) return;
@@ -148,7 +162,14 @@ export function TerminalView({ slaveSession, currentUser, forceReadOnly = false,
             {tab.name}
           </button>
         ) : null}
-        <button className="smartssh-tab icon-only" disabled type="button" aria-label="打开新连接">
+        <button
+          className="smartssh-tab icon-only"
+          disabled={!tab || readOnly}
+          type="button"
+          aria-label="打开同屏分屏"
+          title="打开同屏分屏"
+          onClick={() => setSplitRequestNonce((value) => value + 1)}
+        >
           <Plus size={15} />
         </button>
       </div>
@@ -171,6 +192,7 @@ export function TerminalView({ slaveSession, currentUser, forceReadOnly = false,
           tab={tab}
           readOnly={readOnly}
           active={active}
+          splitRequestNonce={splitRequestNonce}
           onStatusChange={handleTerminalStatusChange}
           onSessionClosed={() => {
             setTab(null);
@@ -204,6 +226,7 @@ function TerminalPanel({
   tab,
   readOnly,
   active,
+  splitRequestNonce,
   onStatusChange,
   onSessionClosed,
   onReleaseSlave
@@ -212,10 +235,12 @@ function TerminalPanel({
   tab: TerminalTab;
   readOnly: boolean;
   active: boolean;
+  splitRequestNonce: number;
   onStatusChange: (status: TerminalTab['status']) => void;
   onSessionClosed: () => void;
   onReleaseSlave: () => void;
 }) {
+  const workbenchRef = useRef<HTMLDivElement | null>(null);
   const terminalElementRef = useRef<HTMLDivElement | null>(null);
   const terminalRef = useRef<Terminal | null>(null);
   const socketRef = useRef<WebSocket | null>(null);
@@ -235,8 +260,16 @@ function TerminalPanel({
   const [status, setStatus] = useState<TerminalTab['status']>('connecting');
   const [sftpOpen, setSftpOpen] = useState(true);
   const [editingFile, setEditingFile] = useState<string | null>(null);
+  const [editorWidthPct, setEditorWidthPct] = useState(46);
   const [terminalCwd, setTerminalCwd] = useState(defaultRoot);
   const [serverClosedReason, setServerClosedReason] = useState('');
+  const splitActive = Boolean(editingFile);
+
+  useEffect(() => {
+    if (splitRequestNonce <= 0) return;
+    setSftpOpen(true);
+    setEditingFile((current) => current ?? EMPTY_SPLIT_FILE);
+  }, [splitRequestNonce]);
 
   useEffect(() => {
     activeRef.current = active;
@@ -526,6 +559,75 @@ function TerminalPanel({
     terminalRef.current?.focus();
   }
 
+  function handleOpenFile(path: string) {
+    setEditingFile(path);
+  }
+
+  function scheduleSplitFit() {
+    window.setTimeout(() => {
+      try {
+        fitAddonRef.current?.fit();
+        terminalRef.current?.focus();
+      } catch {
+        // Retried by ResizeObserver.
+      }
+    }, 80);
+  }
+
+  function updateEditorWidthFromClientX(clientX: number) {
+    if (!Number.isFinite(clientX)) return;
+    const workbench = workbenchRef.current;
+    if (!workbench) return;
+    const rect = workbench.getBoundingClientRect();
+    if (rect.width <= 0) return;
+
+    const minEditor = 320;
+    const minTerminal = 360;
+    if (rect.width <= minEditor + minTerminal) {
+      setEditorWidthPct(50);
+      return;
+    }
+
+    const raw = clientX - rect.left;
+    const bounded = Math.min(Math.max(raw, minEditor), rect.width - minTerminal);
+    setEditorWidthPct(Math.round((bounded / rect.width) * 100));
+  }
+
+  function handleSplitPointerDown(event: ReactPointerEvent<HTMLDivElement>) {
+    if (!workbenchRef.current) return;
+    event.preventDefault();
+    updateEditorWidthFromClientX(event.clientX);
+
+    const previousCursor = document.body.style.cursor;
+    const previousUserSelect = document.body.style.userSelect;
+    document.body.style.cursor = 'col-resize';
+    document.body.style.userSelect = 'none';
+
+    function handlePointerMove(pointerEvent: PointerEvent) {
+      updateEditorWidthFromClientX(pointerEvent.clientX);
+    }
+
+    function handlePointerUp() {
+      window.removeEventListener('pointermove', handlePointerMove);
+      window.removeEventListener('pointerup', handlePointerUp);
+      document.body.style.cursor = previousCursor;
+      document.body.style.userSelect = previousUserSelect;
+      scheduleSplitFit();
+    }
+
+    window.addEventListener('pointermove', handlePointerMove);
+    window.addEventListener('pointerup', handlePointerUp);
+  }
+
+  function handleSplitKeyDown(event: ReactKeyboardEvent<HTMLDivElement>) {
+    if (event.key !== 'ArrowLeft' && event.key !== 'ArrowRight') return;
+    event.preventDefault();
+    setEditorWidthPct((value) => Math.min(70, Math.max(30, value + (event.key === 'ArrowLeft' ? -2 : 2))));
+    scheduleSplitFit();
+  }
+
+  const splitStyle = splitActive ? ({ '--editor-width': `${editorWidthPct}%` } as CSSProperties) : undefined;
+
   return (
     <div className="smartssh-terminal-area">
       <div className="smartssh-session-header">
@@ -538,7 +640,12 @@ function TerminalPanel({
           <span className={`session-state ${status}`}>{status === 'connected' ? '已连接' : status === 'connecting' ? '连接中' : '已断开'}</span>
         </div>
         <div className="smartssh-session-actions">
-          <button className={sftpOpen ? 'secondary-button compact active' : 'secondary-button compact'} disabled={status !== 'connected'} onClick={() => { setSftpOpen((value) => !value); setEditingFile(null); }}>
+          <button
+            className={sftpOpen ? 'secondary-button compact active' : 'secondary-button compact'}
+            data-testid="sftp-toggle-button"
+            disabled={status !== 'connected'}
+            onClick={() => setSftpOpen((value) => !value)}
+          >
             <FolderOpen size={15} /> 文件
           </button>
           {status === 'disconnected' && !serverClosedReason ? (
@@ -560,35 +667,72 @@ function TerminalPanel({
 
       {serverClosedReason ? <div className="terminal-warning">{serverClosedReason}</div> : null}
 
-      <div className="smartssh-terminal-frame">
+      <div
+        className={splitActive ? 'smartssh-terminal-frame split-active' : 'smartssh-terminal-frame'}
+        data-testid="smartssh-terminal-frame"
+        style={splitStyle}
+      >
         {sftpOpen ? (
           <SftpSidebar
             slaveId={tab.slaveId}
             connectionName={tab.name}
             isOpen={sftpOpen}
             terminalCwd={terminalCwd}
-            onOpenFile={setEditingFile}
+            onOpenFile={handleOpenFile}
             onClose={() => setSftpOpen(false)}
             readOnly={readOnly}
           />
         ) : null}
 
-        {editingFile ? (
-          <RemoteFileEditor
-            slaveId={tab.slaveId}
-            filePath={editingFile}
-            readOnly={readOnly}
-            onClose={() => setEditingFile(null)}
-            onSaved={handleSaved}
-          />
-        ) : null}
+        <div className="terminal-workbench-main" data-testid="terminal-workbench-main" ref={workbenchRef}>
+          {editingFile ? (
+            editingFile === EMPTY_SPLIT_FILE ? (
+              <section className="remote-file-editor split-placeholder" data-testid="terminal-split-placeholder">
+                <div className="remote-file-editor-header">
+                  <div>
+                    <strong>选择文件</strong>
+                    <span>{terminalCwd}</span>
+                  </div>
+                  <button className="secondary-button compact" onClick={() => setEditingFile(null)}>
+                    <X size={15} /> 关闭
+                  </button>
+                </div>
+                <div className="terminal-empty">
+                  <p>从左侧当前目录选择一个文件后，将在这里和终端同屏编辑。</p>
+                </div>
+              </section>
+            ) : (
+              <RemoteFileEditor
+                slaveId={tab.slaveId}
+                filePath={editingFile}
+                readOnly={readOnly}
+                onClose={() => setEditingFile(null)}
+                onSaved={handleSaved}
+              />
+            )
+          ) : null}
 
-        <div
-          className="xterm-host xterm-host-smartssh"
-          ref={terminalElementRef}
-          data-testid="web-ssh-terminal"
-          style={{ display: editingFile ? 'none' : 'block' }}
-        />
+          {editingFile ? (
+            <div
+              className="terminal-split-resizer"
+              role="separator"
+              aria-label="调整编辑器与终端宽度"
+              aria-orientation="vertical"
+              aria-valuemin={30}
+              aria-valuemax={70}
+              aria-valuenow={editorWidthPct}
+              tabIndex={0}
+              onPointerDown={handleSplitPointerDown}
+              onKeyDown={handleSplitKeyDown}
+            />
+          ) : null}
+
+          <div
+            className="xterm-host xterm-host-smartssh"
+            ref={terminalElementRef}
+            data-testid="web-ssh-terminal"
+          />
+        </div>
       </div>
 
     </div>

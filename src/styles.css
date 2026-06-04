@@ -2487,6 +2487,41 @@ textarea:focus-visible,
   background: #1c1c1c;
 }
 
+.terminal-workbench-main {
+  flex: 1;
+  min-width: 0;
+  min-height: 0;
+  display: flex;
+  overflow: hidden;
+  background: #1c1c1c;
+}
+
+.smartssh-terminal-frame.split-active .remote-file-editor {
+  flex: 0 0 var(--editor-width, 46%);
+  min-width: 320px;
+  max-width: 70%;
+}
+
+.smartssh-terminal-frame.split-active .xterm-host-smartssh {
+  flex: 1 1 0;
+  min-width: 360px;
+}
+
+.terminal-split-resizer {
+  width: 6px;
+  flex: 0 0 6px;
+  cursor: col-resize;
+  touch-action: none;
+  border-right: 1px solid #30333b;
+  border-left: 1px solid #30333b;
+  background: #181c23;
+}
+
+.terminal-split-resizer:hover,
+.terminal-split-resizer:focus-visible {
+  background: #315f85;
+}
+
 .smartssh-terminal-frame.readonly {
   min-height: 360px;
 }
@@ -2867,9 +2902,36 @@ textarea:focus-visible,
     flex-direction: column;
   }
 
+  .smartssh-terminal-frame {
+    flex-direction: column;
+  }
+
+  .terminal-workbench-main {
+    flex-direction: column;
+  }
+
+  .smartssh-terminal-frame.split-active .remote-file-editor {
+    flex: 1 1 50%;
+    min-width: 0;
+    min-height: 240px;
+    max-width: none;
+  }
+
+  .smartssh-terminal-frame.split-active .xterm-host-smartssh {
+    flex: 1 1 50%;
+    min-width: 0;
+    min-height: 260px;
+  }
+
+  .terminal-split-resizer {
+    display: none;
+  }
+
   .sftp-sidebar {
     width: 100%;
     flex-basis: 280px;
+    height: auto;
+    max-height: 280px;
     border-right: 0;
     border-bottom: 1px solid #2f3542;
   }
