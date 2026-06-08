@@ -42,7 +42,13 @@ vi.mock('@xterm/xterm', () => ({
 }));
 
 vi.mock('./SftpSidebar', () => ({
-  SftpSidebar: ({ onOpenFile, terminalCwd }: { onOpenFile: (path: string) => void; terminalCwd?: string }) => (
+  SftpSidebar: ({
+    onOpenFile,
+    terminalCwd
+  }: {
+    onOpenFile: (path: string) => void;
+    terminalCwd?: string;
+  }) => (
     <aside data-testid="mock-sftp-sidebar" data-terminal-cwd={terminalCwd || ''}>
       <button type="button" data-testid="mock-open-file" onClick={() => onOpenFile('/tmp/swr-debug/arg.txt')}>
         open file
@@ -52,9 +58,12 @@ vi.mock('./SftpSidebar', () => ({
 }));
 
 vi.mock('./RemoteFileEditor', () => ({
-  RemoteFileEditor: ({ filePath }: { filePath: string }) => (
+  RemoteFileEditor: ({ filePath, onClose }: { filePath: string; onClose: () => void }) => (
     <section data-testid="terminal-file-editor" data-path={filePath}>
       editor
+      <button type="button" data-testid="mock-close-editor" onClick={onClose}>
+        close editor
+      </button>
     </section>
   )
 }));
@@ -102,6 +111,8 @@ function makeSlave(overrides: Partial<SlaveSession> = {}): SlaveSession {
     system: 'Linux / sample',
     connectionMode: 'remote-agent',
     agentVersion: 'swr-agent-test',
+    pythonVersion: '3.12.3',
+    robotVersion: 'Robot Framework 7.4.2',
     mode: 'held',
     holder: 'Humphrey',
     heartbeatAt: new Date().toISOString(),
@@ -123,16 +134,20 @@ function makeSlave(overrides: Partial<SlaveSession> = {}): SlaveSession {
 }
 
 async function renderWritableTerminal() {
-  terminalApiMock.createTerminalSession.mockResolvedValue({
-    id: 'session-1',
+  terminalApiMock.createTerminalSession.mockImplementation((
+    _slaveId: string,
+    _holder: string,
+    options?: { mode?: 'reuse' | 'new' }
+  ) => Promise.resolve({
+    id: options?.mode === 'new' ? 'session-2' : 'session-1',
     slaveId: 'vm1',
     shell: '/bin/bash',
     status: 'open',
     createdAt: new Date().toISOString(),
     holder: 'Humphrey',
     readOnly: false
-  });
-  terminalApiMock.buildTerminalWsUrl.mockReturnValue('ws://127.0.0.1/terminal/session-1');
+  }));
+  terminalApiMock.buildTerminalWsUrl.mockImplementation((sessionId: string) => `ws://127.0.0.1/terminal/${sessionId}`);
   terminalApiMock.closeTerminalSession.mockResolvedValue(undefined);
 
   render(
@@ -169,7 +184,7 @@ describe('TerminalView split workbench', () => {
     expect(screen.getByTestId('smartssh-terminal-frame')).toHaveClass('split-active');
   });
 
-  it('opens the current directory split surface from the plus tab button', async () => {
+  it('opens a new terminal split session from the plus tab button using the current cwd', async () => {
     await renderWritableTerminal();
     act(() => {
       MockWebSocket.instances[0].onmessage?.({ data: JSON.stringify({ type: 'cwd', data: '/root/debug' }) } as MessageEvent<string>);
@@ -177,17 +192,172 @@ describe('TerminalView split workbench', () => {
 
     fireEvent.click(screen.getByLabelText('打开同屏分屏'));
 
-    expect(screen.getByTestId('mock-sftp-sidebar')).toBeInTheDocument();
-    expect(screen.getByTestId('mock-sftp-sidebar')).toHaveAttribute('data-terminal-cwd', '/root/debug');
-    expect(screen.getByTestId('terminal-split-placeholder')).toBeInTheDocument();
+    await waitFor(() => {
+      expect(terminalApiMock.createTerminalSession).toHaveBeenCalledWith('vm1', 'Humphrey', {
+        cwd: '/root/debug',
+        mode: 'new'
+      });
+    });
+    expect(screen.getByTestId('sftp-toggle-button')).not.toHaveClass('active');
+    expect(screen.queryByTestId('mock-sftp-sidebar')).not.toBeInTheDocument();
     expect(screen.queryByTestId('terminal-file-editor')).not.toBeInTheDocument();
     expect(screen.getByTestId('web-ssh-terminal')).toBeInTheDocument();
+    expect(await screen.findByTestId('split-web-ssh-terminal')).toBeInTheDocument();
     expect(screen.getByTestId('smartssh-terminal-frame')).toHaveClass('split-active');
+    expect(MockWebSocket.instances).toHaveLength(2);
+    await act(async () => {
+      await new Promise((resolve) => window.setTimeout(resolve, 20));
+    });
+    expect(MockWebSocket.instances).toHaveLength(2);
+    expect(MockWebSocket.instances[1].readyState).toBe(MockWebSocket.OPEN);
 
+    fireEvent.click(screen.getByLabelText('关闭左侧 terminal'));
+
+    await waitFor(() => {
+      expect(terminalApiMock.closeTerminalSession).toHaveBeenCalledWith('session-2');
+    });
+    expect(screen.queryByTestId('split-web-ssh-terminal')).not.toBeInTheDocument();
+    expect(screen.getByTestId('web-ssh-terminal')).toBeInTheDocument();
+  });
+
+  it('opens a file over the split terminal without closing the split session', async () => {
+    await renderWritableTerminal();
+
+    fireEvent.click(screen.getByLabelText('打开同屏分屏'));
+    expect(await screen.findByTestId('split-web-ssh-terminal')).toBeInTheDocument();
+
+    fireEvent.click(screen.getByTestId('sftp-toggle-button'));
     fireEvent.click(screen.getByTestId('mock-open-file'));
 
-    expect(screen.queryByTestId('terminal-split-placeholder')).not.toBeInTheDocument();
-    expect(screen.getByTestId('terminal-file-editor')).toHaveAttribute('data-path', '/tmp/swr-debug/arg.txt');
+    expect(screen.getByTestId('terminal-file-editor')).toBeInTheDocument();
+    expect(screen.queryByTestId('split-web-ssh-terminal')).not.toBeInTheDocument();
+    expect(terminalApiMock.closeTerminalSession).not.toHaveBeenCalledWith('session-2');
+
+    fireEvent.click(screen.getByTestId('mock-close-editor'));
+
+    expect(await screen.findByTestId('split-web-ssh-terminal')).toBeInTheDocument();
+    expect(terminalApiMock.closeTerminalSession).not.toHaveBeenCalledWith('session-2');
+  });
+
+  it('resets the split layout and reopens the file sidebar when releasing the slave', async () => {
+    const onReleaseSlave = vi.fn();
+    terminalApiMock.createTerminalSession.mockImplementation((
+      _slaveId: string,
+      _holder: string,
+      options?: { mode?: 'reuse' | 'new' }
+    ) => Promise.resolve({
+      id: options?.mode === 'new' ? 'session-2' : 'session-1',
+      slaveId: 'vm1',
+      shell: '/bin/bash',
+      status: 'open',
+      createdAt: new Date().toISOString(),
+      holder: 'Humphrey',
+      readOnly: false
+    }));
+    terminalApiMock.buildTerminalWsUrl.mockImplementation((sessionId: string) => `ws://127.0.0.1/terminal/${sessionId}`);
+    terminalApiMock.closeTerminalSession.mockResolvedValue(undefined);
+
+    render(
+      <TerminalView
+        slaveSession={makeSlave()}
+        currentUser="Humphrey"
+        active
+        onBack={vi.fn()}
+        onReleaseSlave={onReleaseSlave}
+        onSessionClosed={vi.fn()}
+      />
+    );
+
+    await waitFor(() => expect(screen.getByTestId('sftp-toggle-button')).not.toBeDisabled());
+    fireEvent.click(screen.getByLabelText('打开同屏分屏'));
+    expect(await screen.findByTestId('split-web-ssh-terminal')).toBeInTheDocument();
+    expect(screen.queryByTestId('mock-sftp-sidebar')).not.toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole('button', { name: /释放 Slave/ }));
+
+    expect(onReleaseSlave).toHaveBeenCalledTimes(1);
+    expect(screen.getByTestId('sftp-toggle-button')).toHaveClass('active');
+    expect(screen.getByTestId('mock-sftp-sidebar')).toBeInTheDocument();
+    expect(screen.queryByTestId('split-web-ssh-terminal')).not.toBeInTheDocument();
+    expect(screen.getByTestId('smartssh-terminal-frame')).not.toHaveClass('split-active');
+  });
+
+  it('does not replay the previous split request after releasing and reconnecting', async () => {
+    const onReleaseSlave = vi.fn();
+    let mainSessionCount = 0;
+    let splitSessionCount = 0;
+    terminalApiMock.createTerminalSession.mockImplementation((
+      _slaveId: string,
+      _holder: string,
+      options?: { mode?: 'reuse' | 'new' }
+    ) => Promise.resolve({
+      id: options?.mode === 'new' ? `session-split-${++splitSessionCount}` : `session-main-${++mainSessionCount}`,
+      slaveId: 'vm1',
+      shell: '/bin/bash',
+      status: 'open',
+      createdAt: new Date().toISOString(),
+      holder: 'Humphrey',
+      readOnly: false
+    }));
+    terminalApiMock.buildTerminalWsUrl.mockImplementation((sessionId: string) => `ws://127.0.0.1/terminal/${sessionId}`);
+    terminalApiMock.closeTerminalSession.mockResolvedValue(undefined);
+
+    const { rerender } = render(
+      <TerminalView
+        slaveSession={makeSlave()}
+        currentUser="Humphrey"
+        active
+        releaseNonce={0}
+        onBack={vi.fn()}
+        onReleaseSlave={onReleaseSlave}
+        onSessionClosed={vi.fn()}
+      />
+    );
+
+    await waitFor(() => expect(screen.getByTestId('sftp-toggle-button')).not.toBeDisabled());
+    fireEvent.click(screen.getByLabelText('打开同屏分屏'));
+    expect(await screen.findByTestId('split-web-ssh-terminal')).toBeInTheDocument();
+    fireEvent.click(screen.getByRole('button', { name: /释放 Slave/ }));
+
+    rerender(
+      <TerminalView
+        slaveSession={makeSlave({ mode: 'idle', holder: '' })}
+        currentUser="Humphrey"
+        active={false}
+        releaseNonce={1}
+        onBack={vi.fn()}
+        onReleaseSlave={onReleaseSlave}
+        onSessionClosed={vi.fn()}
+      />
+    );
+
+    await waitFor(() => {
+      expect(terminalApiMock.closeTerminalSession).toHaveBeenCalledWith('session-main-1');
+    });
+
+    rerender(
+      <TerminalView
+        slaveSession={makeSlave()}
+        currentUser="Humphrey"
+        active
+        releaseNonce={1}
+        onBack={vi.fn()}
+        onReleaseSlave={onReleaseSlave}
+        onSessionClosed={vi.fn()}
+      />
+    );
+
+    await waitFor(() => expect(screen.getByTestId('sftp-toggle-button')).not.toBeDisabled());
+    await act(async () => {
+      await new Promise((resolve) => window.setTimeout(resolve, 30));
+    });
+
+    const splitCalls = terminalApiMock.createTerminalSession.mock.calls.filter((call) => call[2]?.mode === 'new');
+    expect(splitCalls).toHaveLength(1);
+    expect(screen.getByTestId('sftp-toggle-button')).toHaveClass('active');
+    expect(screen.getByTestId('mock-sftp-sidebar')).toBeInTheDocument();
+    expect(screen.queryByTestId('split-web-ssh-terminal')).not.toBeInTheDocument();
+    expect(screen.getByTestId('smartssh-terminal-frame')).not.toHaveClass('split-active');
   });
 
   it('updates the editor width through the split resizer', async () => {

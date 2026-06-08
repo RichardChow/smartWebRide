@@ -101,6 +101,8 @@ export interface SlaveSession {
   system: string;
   connectionMode: 'remote-agent' | 'local-agent';
   agentVersion: string;
+  pythonVersion: string;
+  robotVersion: string;
   mode: 'idle' | 'held' | 'running' | 'offline';
   holder: string;
   heartbeatAt: string;

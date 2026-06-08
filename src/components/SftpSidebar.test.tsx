@@ -120,4 +120,10 @@ describe('SftpSidebar', () => {
 
     expect(navigate).toHaveBeenCalledWith('/home/demo');
   });
+
+  it('uses the stable sidebar class', () => {
+    renderSidebar();
+
+    expect(screen.getByLabelText('远程文件')).toHaveClass('sftp-sidebar');
+  });
 });

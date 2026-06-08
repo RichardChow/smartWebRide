@@ -1,6 +1,9 @@
+import asyncio
 import os
+import tempfile
 import unittest
-from unittest.mock import patch
+from pathlib import Path
+from unittest.mock import Mock, patch
 
 from agent.swr_agent.pty_service import PtyService, PtySession, TerminalAnsiHighlighter
 
@@ -41,6 +44,20 @@ class PtySessionShapeTest(unittest.TestCase):
         self.assertEqual(env["COLORTERM"], "truecolor")
         self.assertEqual(env["CLICOLOR"], "1")
 
+    def test_bash_bootstrap_path_is_uid_scoped(self):
+        async def _noop(_session_id: str, _data: str) -> None:
+            return None
+
+        service = PtyService(_noop)
+        with tempfile.TemporaryDirectory() as temp_dir:
+            with patch("agent.swr_agent.pty_service.tempfile.gettempdir", return_value=temp_dir):
+                with patch("agent.swr_agent.pty_service.os.getuid", return_value=1234, create=True):
+                    rc_path = service._ensure_bash_bootstrap()
+
+        self.assertEqual(rc_path.name, "bashrc")
+        self.assertEqual(rc_path.parent.name, "smartwebride-terminal-1234")
+        self.assertTrue(str(rc_path).startswith(str(Path(temp_dir))))
+
     @unittest.skipIf(os.name == "nt", "bash bootstrap is only used for Linux PTY sessions")
     def test_bash_command_uses_smartwebride_rcfile(self):
         async def _noop(_session_id: str, _data: str) -> None:
@@ -57,6 +74,34 @@ class PtySessionShapeTest(unittest.TestCase):
         self.assertIn("SWR_PROFILE_BOOTSTRAPPED", rc_text)
         self.assertIn("TERM=xterm-256color", rc_text)
         self.assertNotIn("ls() {", rc_text)
+
+
+class PtyServiceLifecycleTest(unittest.IsolatedAsyncioTestCase):
+    async def test_close_all_terminates_all_sessions(self):
+        async def _noop(_session_id: str, _data: str) -> None:
+            return None
+
+        service = PtyService(_noop)
+        first_process = Mock()
+        first_process.poll.return_value = None
+        first_process.stdin = None
+        second_process = Mock()
+        second_process.poll.return_value = None
+        second_process.stdin = None
+        first_task = asyncio.create_task(asyncio.sleep(60))
+        second_task = asyncio.create_task(asyncio.sleep(60))
+        service.sessions["s1"] = PtySession("s1", first_process, first_task, master_fd=None)
+        service.sessions["s2"] = PtySession("s2", second_process, second_task, master_fd=None)
+
+        with patch("agent.swr_agent.pty_service.os.name", "nt"):
+            await service.close_all()
+        await asyncio.sleep(0)
+
+        self.assertEqual(service.sessions, {})
+        first_process.terminate.assert_called_once()
+        second_process.terminate.assert_called_once()
+        self.assertTrue(first_task.cancelled())
+        self.assertTrue(second_task.cancelled())
 
 
 class TerminalAnsiHighlighterTest(unittest.TestCase):

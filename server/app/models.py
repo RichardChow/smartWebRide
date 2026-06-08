@@ -19,6 +19,8 @@ class SlaveInfo(BaseModel):
     system: str
     connectionMode: str = "remote-agent"
     agentVersion: str = ""
+    pythonVersion: str = ""
+    robotVersion: str = ""
     mode: str = "offline"
     holder: str = ""
     heartbeatAt: str = ""

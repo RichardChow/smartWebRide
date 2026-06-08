@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import posixpath
 from datetime import datetime, timezone
 
 from fastapi import FastAPI, HTTPException, Query, WebSocket, WebSocketDisconnect
@@ -13,6 +14,9 @@ from .slave_registry import SlaveRegistry
 
 ACTIVITY_POLL_INTERVAL = 12
 LOCK_RENEW_INTERVAL = 60
+AGENT_HEALTH_INTERVAL = 5
+AGENT_STALE_SECONDS = 20
+AGENT_MAX_REQUEST_FAILURES = 1
 
 app = FastAPI(title="smartWebRide Center", version="0.1.0")
 app.add_middleware(
@@ -37,6 +41,41 @@ def default_terminal_cwd(roots: list[str]) -> str:
         if normalized.startswith("/home/") and normalized.count("/") == 2:
             return root
     return roots[0] if roots else "."
+
+
+def normalize_remote_path(value: str) -> str:
+    normalized = value.strip().replace("\\", "/")
+    if not normalized:
+        return ""
+    if len(normalized) >= 2 and normalized[1] == ":":
+        drive = normalized[:2].lower()
+        rest = posixpath.normpath(normalized[2:] or "/")
+        if rest == ".":
+            rest = "/"
+        if not rest.startswith("/"):
+            rest = f"/{rest}"
+        return f"{drive}{rest}".rstrip("/") or f"{drive}/"
+    normalized = posixpath.normpath(normalized)
+    if normalized == ".":
+        return ""
+    return normalized.rstrip("/") or "/"
+
+
+def is_allowed_terminal_cwd(cwd: str, roots: list[str]) -> bool:
+    normalized = normalize_remote_path(cwd)
+    if not normalized:
+        return False
+    if not roots:
+        return normalized in {".", "/"}
+    for root in roots:
+        allowed = normalize_remote_path(root)
+        if not allowed:
+            continue
+        if allowed == "/":
+            return normalized.startswith("/")
+        if normalized == allowed or normalized.startswith(f"{allowed}/"):
+            return True
+    return False
 
 
 @app.get("/api/health")
@@ -115,7 +154,12 @@ async def list_audit(slave_id: str) -> dict:
 
 
 @app.post("/api/slaves/{slave_id}/terminal/sessions", response_model=TerminalSessionResponse)
-async def create_terminal_session(slave_id: str, holder: str = Query(...)) -> TerminalSessionResponse:
+async def create_terminal_session(
+    slave_id: str,
+    holder: str = Query(...),
+    mode: str = "reuse",
+    cwd: str = "",
+) -> TerminalSessionResponse:
     slave = registry.get(slave_id)
     if not slave:
         raise HTTPException(status_code=404, detail="slave not found")
@@ -123,13 +167,18 @@ async def create_terminal_session(slave_id: str, holder: str = Query(...)) -> Te
         raise HTTPException(status_code=503, detail="agent offline")
     if not registry.can_write(slave_id, holder):
         raise HTTPException(status_code=409, detail=f"slave is held by {slave.holder or 'another user'}")
-    session = hub.find_reusable_terminal_session(slave_id, holder)
-    if session:
-        return TerminalSessionResponse(id=session.session_id, slaveId=slave_id, shell=session.shell, readOnly=False)
+    if mode not in {"reuse", "new"}:
+        raise HTTPException(status_code=400, detail="terminal session mode must be reuse or new")
+    if mode == "reuse":
+        session = hub.find_reusable_terminal_session(slave_id, holder)
+        if session:
+            return TerminalSessionResponse(id=session.session_id, slaveId=slave_id, shell=session.shell, readOnly=False)
     shell = "powershell.exe" if "windows" in slave.system.lower() else "/bin/bash"
-    cwd = default_terminal_cwd(slave.allowedRoots)
+    target_cwd = cwd.strip() or default_terminal_cwd(slave.allowedRoots)
+    if not is_allowed_terminal_cwd(target_cwd, slave.allowedRoots):
+        raise HTTPException(status_code=400, detail="terminal cwd is outside allowed roots")
     try:
-        session = await hub.create_terminal_session(slave_id, shell=shell, cwd=cwd, holder=holder)
+        session = await hub.create_terminal_session(slave_id, shell=shell, cwd=target_cwd, holder=holder, reusable=mode == "reuse")
     except RuntimeError as exc:
         raise HTTPException(status_code=503, detail=str(exc))
     return TerminalSessionResponse(id=session.session_id, slaveId=slave_id, shell=shell, readOnly=False)
@@ -189,6 +238,9 @@ async def terminal_ws(websocket: WebSocket, session_id: str) -> None:
                 await websocket.send_json({"type": "error", "message": str(exc)})
     except WebSocketDisconnect:
         pass
+    except RuntimeError as exc:
+        if "WebSocket is not connected" not in str(exc):
+            raise
     finally:
         output_task.cancel()
         session.output_queues.discard(queue)
@@ -231,16 +283,34 @@ async def _file_request(slave_id: str, action: str, payload: dict) -> dict:
 
 
 @app.websocket("/api/agent/connect/{slave_id}")
-async def agent_connect(websocket: WebSocket, slave_id: str, version: str = Query("swr-agent-dev")) -> None:
+async def agent_connect(
+    websocket: WebSocket,
+    slave_id: str,
+    version: str = Query("swr-agent-dev"),
+    pythonVersion: str = Query(""),
+    robotVersion: str = Query(""),
+) -> None:
     await websocket.accept()
     roots_header = websocket.query_params.get("roots", "")
     roots = [root for root in roots_header.split("|") if root]
-    registry.mark_agent_online(slave_id, version, roots or None)
+    registry.mark_agent_online(slave_id, version, roots or None, pythonVersion, robotVersion)
     connection = hub.attach_agent(slave_id, websocket)
     try:
         while True:
             message = await websocket.receive_text()
-            await hub.handle_agent_message(connection, message)
+            agent_status = await hub.handle_agent_message(connection, message)
+            if agent_status and agent_status.get("type") == "agent.heartbeat":
+                heartbeat_roots = agent_status.get("roots")
+                roots_payload = heartbeat_roots if isinstance(heartbeat_roots, list) else None
+                registry.mark_agent_seen(
+                    slave_id,
+                    version=str(agent_status.get("version") or ""),
+                    allowed_roots=[str(root) for root in roots_payload] if roots_payload else None,
+                    python_version=str(agent_status.get("pythonVersion") or ""),
+                    robot_version=str(agent_status.get("robotVersion") or ""),
+                )
+            else:
+                registry.mark_agent_seen(slave_id)
     except WebSocketDisconnect:
         pass
     finally:
@@ -267,7 +337,22 @@ async def _terminal_session_renew_loop() -> None:
         await asyncio.sleep(LOCK_RENEW_INTERVAL)
 
 
+async def _agent_health_loop() -> None:
+    while True:
+        for connection in hub.list_agent_connections():
+            stale = hub.is_connection_stale(connection, AGENT_STALE_SECONDS)
+            unhealthy = connection.request_failures >= AGENT_MAX_REQUEST_FAILURES
+            if not stale and not unhealthy:
+                continue
+            reason = connection.last_error or "agent heartbeat stale"
+            await hub.close_agent_connection(connection, reason)
+            if hub.detach_agent(connection.slave_id, connection):
+                registry.mark_agent_offline(connection.slave_id)
+        await asyncio.sleep(AGENT_HEALTH_INTERVAL)
+
+
 @app.on_event("startup")
 async def _start_background_tasks() -> None:
     asyncio.create_task(_activity_poll_loop())
     asyncio.create_task(_terminal_session_renew_loop())
+    asyncio.create_task(_agent_health_loop())

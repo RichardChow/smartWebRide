@@ -56,6 +56,8 @@ function makeSlave(overrides: Partial<SlaveSession> = {}): SlaveSession {
     system: 'Linux / VMware',
     connectionMode: 'remote-agent',
     agentVersion: 'swr-agent-test',
+    pythonVersion: '3.12.3',
+    robotVersion: 'Robot Framework 7.4.2',
     mode: 'held',
     holder: 'humphrey1',
     heartbeatAt: new Date().toISOString(),

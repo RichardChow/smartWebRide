@@ -100,12 +100,21 @@ class SlaveRegistry:
             slave.manualHoldReason = ""
         self._recompute_mode(slave)
 
-    def mark_agent_online(self, slave_id: str, version: str, allowed_roots: list[str] | None = None) -> SlaveInfo:
+    def mark_agent_online(
+        self,
+        slave_id: str,
+        version: str,
+        allowed_roots: list[str] | None = None,
+        python_version: str = "",
+        robot_version: str = "",
+    ) -> SlaveInfo:
         slave = self._slaves.setdefault(
             slave_id,
             SlaveInfo(slaveId=slave_id, name=slave_id, host=slave_id, system="unknown"),
         )
         slave.agentVersion = version
+        slave.pythonVersion = python_version
+        slave.robotVersion = robot_version
         slave.heartbeatAt = utc_now().isoformat()
         if allowed_roots:
             slave.allowedRoots = allowed_roots
@@ -117,8 +126,32 @@ class SlaveRegistry:
         if not slave:
             return
         slave.agentVersion = ""
+        slave.pythonVersion = ""
+        slave.robotVersion = ""
         slave.activeRunId = ""
         slave.processSignal = "none"
+        self._recompute_mode(slave)
+
+    def mark_agent_seen(
+        self,
+        slave_id: str,
+        version: str = "",
+        allowed_roots: list[str] | None = None,
+        python_version: str = "",
+        robot_version: str = "",
+    ) -> None:
+        slave = self._slaves.get(slave_id)
+        if not slave or not slave.agentVersion:
+            return
+        if version:
+            slave.agentVersion = version
+        if python_version:
+            slave.pythonVersion = python_version
+        if robot_version:
+            slave.robotVersion = robot_version
+        if allowed_roots:
+            slave.allowedRoots = allowed_roots
+        slave.heartbeatAt = utc_now().isoformat()
         self._recompute_mode(slave)
 
     def lock(self, slave_id: str, holder: str, reason: str = "") -> SlaveInfo:

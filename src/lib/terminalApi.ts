@@ -21,6 +21,11 @@ export interface TerminalSessionResponse {
   readOnly: boolean;
 }
 
+export interface CreateTerminalSessionOptions {
+  cwd?: string;
+  mode?: 'reuse' | 'new';
+}
+
 export interface SftpFileEntry {
   name: string;
   type: 'file' | 'directory' | 'symlink';
@@ -104,8 +109,11 @@ export async function forceTakeover(slaveId: string, newHolder: string, reason: 
   });
 }
 
-export async function createTerminalSession(slaveId: string, holder: string): Promise<TerminalSessionResponse> {
-  return fetchJson<TerminalSessionResponse>(`${API_BASE}/slaves/${encodeURIComponent(slaveId)}/terminal/sessions?holder=${encodeURIComponent(holder)}`, {
+export async function createTerminalSession(slaveId: string, holder: string, options: CreateTerminalSessionOptions = {}): Promise<TerminalSessionResponse> {
+  const params = new URLSearchParams({ holder });
+  if (options.mode) params.set('mode', options.mode);
+  if (options.cwd) params.set('cwd', options.cwd);
+  return fetchJson<TerminalSessionResponse>(`${API_BASE}/slaves/${encodeURIComponent(slaveId)}/terminal/sessions?${params.toString()}`, {
     method: 'POST'
   });
 }

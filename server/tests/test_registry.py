@@ -13,9 +13,11 @@ def _expire(registry: SlaveRegistry, slave_id: str) -> None:
 class SlaveRegistryTest(unittest.TestCase):
     def test_agent_online_changes_mode_to_idle(self):
         registry = SlaveRegistry()
-        slave = registry.mark_agent_online("vm1", "test-agent", ["/tmp"])
+        slave = registry.mark_agent_online("vm1", "test-agent", ["/tmp"], "3.12.3", "Robot Framework 7.4.2")
         self.assertEqual(slave.mode, "idle")
         self.assertEqual(slave.allowedRoots, ["/tmp"])
+        self.assertEqual(slave.pythonVersion, "3.12.3")
+        self.assertEqual(slave.robotVersion, "Robot Framework 7.4.2")
 
     def test_lock_rejects_second_holder(self):
         registry = SlaveRegistry()
@@ -136,6 +138,38 @@ class SlaveRegistryTest(unittest.TestCase):
         registry = SlaveRegistry()
         with self.assertRaises(ValueError):
             registry.lock("vm1", "Humphrey")  # 默认 agentVersion 空 = 离线
+
+    def test_mark_agent_seen_refreshes_connected_agent_heartbeat(self):
+        registry = SlaveRegistry()
+        slave = registry.mark_agent_online("vm1", "test-agent")
+        slave.heartbeatAt = "2026-01-01T00:00:00+00:00"
+
+        registry.mark_agent_seen("vm1")
+
+        self.assertNotEqual(registry.get("vm1").heartbeatAt, "2026-01-01T00:00:00+00:00")
+
+    def test_mark_agent_seen_refreshes_runtime_versions_from_heartbeat(self):
+        registry = SlaveRegistry()
+        registry.mark_agent_online("vm1", "test-agent", ["/tmp"], "3.11.0", "未安装")
+
+        registry.mark_agent_seen("vm1", version="test-agent-2", allowed_roots=["/root/debug"], python_version="3.12.3", robot_version="Robot Framework 7.4.2")
+
+        slave = registry.get("vm1")
+        self.assertEqual(slave.agentVersion, "test-agent-2")
+        self.assertEqual(slave.allowedRoots, ["/root/debug"])
+        self.assertEqual(slave.pythonVersion, "3.12.3")
+        self.assertEqual(slave.robotVersion, "Robot Framework 7.4.2")
+
+    def test_mark_agent_offline_clears_runtime_versions(self):
+        registry = SlaveRegistry()
+        registry.mark_agent_online("vm1", "test-agent", ["/tmp"], "3.12.3", "Robot Framework 7.4.2")
+
+        registry.mark_agent_offline("vm1")
+
+        slave = registry.get("vm1")
+        self.assertEqual(slave.agentVersion, "")
+        self.assertEqual(slave.pythonVersion, "")
+        self.assertEqual(slave.robotVersion, "")
 
 
 if __name__ == "__main__":

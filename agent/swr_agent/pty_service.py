@@ -268,8 +268,8 @@ class PtyService:
         self.on_cwd = on_cwd
         self.sessions: dict[str, PtySession] = {}
 
-    async def open(self, shell: str, cwd: str, argv: list[str] | None = None) -> str:
-        session_id = uuid.uuid4().hex[:12]
+    async def open(self, shell: str, cwd: str, argv: list[str] | None = None, session_id: str | None = None) -> str:
+        session_id = session_id or uuid.uuid4().hex[:12]
         cwd_path = str(Path(cwd).expanduser())
         command = self._build_command(shell, argv)
         env = self._build_env()
@@ -284,6 +284,7 @@ class PtyService:
                 env=env,
             )
             task = asyncio.create_task(self._read_pipe_loop(session_id, process))
+            task.add_done_callback(lambda done_task, sid=session_id: self._log_reader_failure(sid, done_task))
             self.sessions[session_id] = PtySession(session_id, process, task, cwd=cwd_path)
         else:
             master_fd, slave_fd = os.openpty()
@@ -305,6 +306,7 @@ class PtyService:
             )
             os.close(slave_fd)
             task = asyncio.create_task(self._read_pty_loop(session_id, master_fd))
+            task.add_done_callback(lambda done_task, sid=session_id: self._log_reader_failure(sid, done_task))
             self.sessions[session_id] = PtySession(session_id, process, task, master_fd, TerminalAnsiHighlighter(), cwd_path)
         await self.emit_cwd(session_id)
         return session_id
@@ -327,8 +329,14 @@ class PtyService:
         return Path(command[0]).name == "bash"
 
     def _ensure_bash_bootstrap(self) -> Path:
-        base_dir = Path(tempfile.gettempdir()) / "smartwebride-terminal"
+        owner = str(os.getuid()) if hasattr(os, "getuid") else os.environ.get("USERNAME", "user")
+        safe_owner = re.sub(r"[^A-Za-z0-9_.-]", "_", owner)
+        base_dir = Path(tempfile.gettempdir()) / f"smartwebride-terminal-{safe_owner}"
         base_dir.mkdir(parents=True, exist_ok=True)
+        try:
+            base_dir.chmod(0o700)
+        except OSError:
+            pass
         rc_path = base_dir / "bashrc"
         rc_path.write_text(BASH_RC_TEMPLATE, encoding="utf-8")
         return rc_path
@@ -390,20 +398,45 @@ class PtyService:
         session = self.sessions.pop(session_id, None)
         if not session:
             return
-        session.reader_task.cancel()
-        if session.process.poll() is None:
-            if os.name != "nt":
-                try:
-                    os.killpg(os.getpgid(session.process.pid), signal.SIGTERM)
-                except ProcessLookupError:
-                    pass
-            else:
-                session.process.terminate()
         if session.master_fd is not None:
             try:
                 os.close(session.master_fd)
             except OSError:
                 pass
+        session.reader_task.cancel()
+        if session.process.poll() is None:
+            if os.name != "nt":
+                await self._terminate_posix_process_group(session.process)
+            else:
+                session.process.terminate()
+                if not await self._wait_process(session.process, timeout=1):
+                    session.process.kill()
+                    await self._wait_process(session.process, timeout=1)
+
+    async def close_all(self) -> None:
+        for session_id in list(self.sessions):
+            await self.close(session_id)
+
+    async def _terminate_posix_process_group(self, process: subprocess.Popen) -> None:
+        for sig in (signal.SIGHUP, signal.SIGTERM):
+            try:
+                os.killpg(os.getpgid(process.pid), sig)
+            except ProcessLookupError:
+                return
+            if await self._wait_process(process, timeout=1):
+                return
+        try:
+            os.killpg(os.getpgid(process.pid), signal.SIGKILL)
+        except ProcessLookupError:
+            return
+        await self._wait_process(process, timeout=1)
+
+    async def _wait_process(self, process: subprocess.Popen, timeout: float) -> bool:
+        try:
+            await asyncio.to_thread(process.wait, timeout=timeout)
+            return True
+        except subprocess.TimeoutExpired:
+            return False
 
     async def _read_pipe_loop(self, session_id: str, process: subprocess.Popen) -> None:
         assert process.stdout is not None
@@ -426,3 +459,10 @@ class PtyService:
             if session and session.highlighter:
                 output = session.highlighter.feed(output)
             await self.on_output(session_id, output)
+
+    def _log_reader_failure(self, session_id: str, task: asyncio.Task) -> None:
+        if task.cancelled():
+            return
+        exc = task.exception()
+        if exc:
+            print(f"[smartWebRide Agent] PTY reader failed: {session_id}: {exc}", flush=True)
