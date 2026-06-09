@@ -1,5 +1,6 @@
 import { Server, UserRound } from 'lucide-react';
 import { useEffect, useMemo, useState } from 'react';
+import { HomeHeroPreview } from './components/HomeHeroPreview';
 import { SlaveStatusHome } from './components/SlaveStatusHome';
 import { TerminalView } from './components/TerminalView';
 import { slaveSessions as initialSlaveSessions } from './data/mockRuntime';
@@ -26,6 +27,7 @@ function renewSessionLock(session: SlaveSession, currentUser: string): SlaveSess
 }
 
 export function App() {
+  const isHomeHeroPreview = window.location.pathname === '/preview/home-hero';
   const [currentUser, setCurrentUser] = useState(loadCurrentUser);
   const [activeView, setActiveView] = useState<AppView>('slaves');
   const [slaveSessions, setSlaveSessions] = useState<SlaveSession[]>(initialSlaveSessions);
@@ -187,14 +189,25 @@ export function App() {
 
       <main className={`content-shell ${activeView === 'terminal' ? 'terminal-content-shell' : ''}`}>
         <div style={{ display: activeView === 'slaves' ? 'block' : 'none' }}>
-          <SlaveStatusHome
-            sessions={slaveSessions}
-            currentUser={currentUser}
-            statusMessage={centerStatus}
-            onEnterSlave={enterSlave}
-            onReleaseSlave={(slaveId) => void releaseSlaveLock(slaveId)}
-            onForceTakeover={(slaveId, reason) => void forceTakeoverSlave(slaveId, reason)}
-          />
+          {isHomeHeroPreview ? (
+            <HomeHeroPreview
+              sessions={slaveSessions}
+              currentUser={currentUser}
+              statusMessage={centerStatus}
+              onEnterSlave={enterSlave}
+              onReleaseSlave={(slaveId) => void releaseSlaveLock(slaveId)}
+              onForceTakeover={(slaveId, reason) => void forceTakeoverSlave(slaveId, reason)}
+            />
+          ) : (
+            <SlaveStatusHome
+              sessions={slaveSessions}
+              currentUser={currentUser}
+              statusMessage={centerStatus}
+              onEnterSlave={enterSlave}
+              onReleaseSlave={(slaveId) => void releaseSlaveLock(slaveId)}
+              onForceTakeover={(slaveId, reason) => void forceTakeoverSlave(slaveId, reason)}
+            />
+          )}
         </div>
         {terminalMounted ? (
           <div style={{ display: activeView === 'terminal' ? 'block' : 'none' }}>

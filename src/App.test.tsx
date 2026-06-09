@@ -29,6 +29,22 @@ vi.mock('./components/SlaveStatusHome', () => ({
   )
 }));
 
+vi.mock('./components/HomeHeroPreview', async () => {
+  const slaveModule = await vi.importMock<typeof import('./components/SlaveStatusHome')>('./components/SlaveStatusHome');
+  return {
+    HomeHeroPreview: (props: {
+      onEnterSlave: (slaveId: string, readOnly: boolean) => void;
+      onForceTakeover: (slaveId: string, reason: string) => void;
+      onReleaseSlave: (slaveId: string) => void;
+    }) => (
+      <div>
+        <h1>Hero Preview Route</h1>
+        <slaveModule.SlaveStatusHome {...props} />
+      </div>
+    )
+  };
+});
+
 vi.mock('./components/TerminalView', () => ({
   TerminalView: ({
     forceReadOnly,
@@ -82,6 +98,7 @@ describe('App takeover flow', () => {
   beforeEach(() => {
     sessionStorage.clear();
     vi.clearAllMocks();
+    window.history.pushState(null, '', '/');
   });
 
   it('enters writable terminal from the takeover response instead of stale slave state', async () => {
@@ -120,5 +137,30 @@ describe('App takeover flow', () => {
       expect(screen.getByTestId('terminal-view').parentElement).toHaveStyle({ display: 'none' });
     });
     expect(apiMocks.releaseSlave).toHaveBeenCalledWith('vm1', 'Humphrey');
+  });
+
+  it('keeps the default home route separate from the hero preview route', async () => {
+    apiMocks.listSlaves.mockResolvedValue([makeSlave({ mode: 'idle', holder: '' })]);
+
+    render(<App />);
+
+    await screen.findByRole('button', { name: '进入终端' });
+    expect(screen.queryByText('Hero Preview Route')).not.toBeInTheDocument();
+  });
+
+  it('renders the hero preview route without changing slave actions', async () => {
+    const idleSlave = makeSlave({ mode: 'idle', holder: '' });
+    apiMocks.listSlaves.mockResolvedValue([idleSlave]);
+    apiMocks.lockSlave.mockResolvedValue(makeSlave({ holder: 'Humphrey' }));
+    window.history.pushState(null, '', '/preview/home-hero');
+
+    render(<App />);
+
+    expect(await screen.findByText('Hero Preview Route')).toBeInTheDocument();
+    fireEvent.click(screen.getByRole('button', { name: '进入终端' }));
+
+    await waitFor(() => {
+      expect(screen.getByTestId('terminal-view')).toHaveAttribute('data-readonly', 'false');
+    });
   });
 });

@@ -7,6 +7,7 @@ interface SlaveStatusHomeProps {
   sessions: SlaveSession[];
   currentUser: string;
   statusMessage?: string;
+  hideCommandBand?: boolean;
   onEnterSlave: (slaveId: string, readOnly: boolean) => void;
   onReleaseSlave: (slaveId: string) => void;
   onForceTakeover: (slaveId: string, reason: string) => void;
@@ -101,7 +102,7 @@ function FieldLine({ label, value }: { label: string; value: ReactNode }) {
   );
 }
 
-export function SlaveStatusHome({ sessions, currentUser, statusMessage, onEnterSlave, onReleaseSlave, onForceTakeover }: SlaveStatusHomeProps) {
+export function SlaveStatusHome({ sessions, currentUser, statusMessage, hideCommandBand = false, onEnterSlave, onReleaseSlave, onForceTakeover }: SlaveStatusHomeProps) {
   const [takeoverTarget, setTakeoverTarget] = useState<SlaveSession | null>(null);
   const [takeoverReason, setTakeoverReason] = useState('');
 
@@ -128,22 +129,24 @@ export function SlaveStatusHome({ sessions, currentUser, statusMessage, onEnterS
 
   return (
     <div className="slave-status-home">
-      <section className="slave-command-band" aria-labelledby="slave-home-title">
-        <div className="slave-command-copy">
-          <p className="eyebrow">环境入口</p>
-          <h1 id="slave-home-title">选择调试 Slave</h1>
-          <p>返回这个页面不会释放环境。只有关闭当前终端会话，或者点击“释放 Slave”，该节点才会回到空闲状态。</p>
-        </div>
+      {hideCommandBand ? null : (
+        <section className="slave-command-band" aria-labelledby="slave-home-title">
+          <div className="slave-command-copy">
+            <p className="eyebrow">环境入口</p>
+            <h1 id="slave-home-title">选择调试 Slave</h1>
+            <p>返回这个页面不会释放环境。只有关闭当前终端会话，或者点击“释放 Slave”，该节点才会回到空闲状态。</p>
+          </div>
 
-        <div className="slave-summary-strip" aria-label="Slave 状态统计">
-          {summaryItems.map((item) => (
-            <span key={item.mode} className={`status-summary-card status-${item.mode}`}>
-              <small>{item.label}</small>
-              <strong>{item.count}</strong>
-            </span>
-          ))}
-        </div>
-      </section>
+          <div className="slave-summary-strip" aria-label="Slave 状态统计">
+            {summaryItems.map((item) => (
+              <span key={item.mode} className={`status-summary-card status-${item.mode}`}>
+                <small>{item.label}</small>
+                <strong>{item.count}</strong>
+              </span>
+            ))}
+          </div>
+        </section>
+      )}
 
       {statusMessage ? <p className="slave-center-status">{statusMessage}</p> : null}
 
