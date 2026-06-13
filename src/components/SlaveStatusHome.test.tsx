@@ -15,6 +15,7 @@ function makeSlave(overrides: Partial<SlaveSession> = {}): SlaveSession {
     robotVersion: 'Robot Framework 7.4.2',
     mode: 'idle',
     holder: '',
+    holderEmail: '',
     heartbeatAt: '2026-06-08T02:55:00.000Z',
     expiresAt: '',
     manualHoldReason: '',
@@ -74,7 +75,7 @@ describe('SlaveStatusHome', () => {
   });
 
   it('lets the current holder continue and release the terminal', () => {
-    const { onEnterSlave, onReleaseSlave } = renderHome([makeSlave({ mode: 'held', holder: 'Humphrey', expiresAt: '2026-06-08T03:10:00.000Z' })]);
+    const { onEnterSlave, onReleaseSlave } = renderHome([makeSlave({ mode: 'held', holder: 'Humphrey', holderEmail: 'humphrey@example.com', expiresAt: '2026-06-08T03:10:00.000Z' })]);
 
     fireEvent.click(screen.getByRole('button', { name: '继续终端' }));
     fireEvent.click(screen.getByRole('button', { name: '释放 Slave' }));
@@ -88,6 +89,7 @@ describe('SlaveStatusHome', () => {
       makeSlave({
         mode: 'running',
         holder: 'Alice',
+        holderEmail: 'alice@example.com',
         expiresAt: '2026-06-08T03:10:00.000Z',
         manualHoldReason: 'Alice 正在定位问题',
         processSignal: 'robot'
@@ -112,7 +114,7 @@ describe('SlaveStatusHome', () => {
   });
 
   it('disables terminal connection for an offline slave', () => {
-    const { onEnterSlave } = renderHome([makeSlave({ agentVersion: '', mode: 'offline', heartbeatAt: '', capabilities: { ...makeSlave().capabilities, terminal: true } })]);
+    const { onEnterSlave } = renderHome([makeSlave({ agentVersion: '', mode: 'offline', holderEmail: '', heartbeatAt: '', capabilities: { ...makeSlave().capabilities, terminal: true } })]);
 
     const button = screen.getByRole('button', { name: '不可连接' });
     expect(button).toBeDisabled();

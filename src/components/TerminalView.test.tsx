@@ -115,6 +115,7 @@ function makeSlave(overrides: Partial<SlaveSession> = {}): SlaveSession {
     robotVersion: 'Robot Framework 7.4.2',
     mode: 'held',
     holder: 'Humphrey',
+    holderEmail: 'humphrey@example.com',
     heartbeatAt: new Date().toISOString(),
     expiresAt: new Date(Date.now() + 300_000).toISOString(),
     manualHoldReason: 'Web SSH debug lock',
@@ -136,7 +137,6 @@ function makeSlave(overrides: Partial<SlaveSession> = {}): SlaveSession {
 async function renderWritableTerminal() {
   terminalApiMock.createTerminalSession.mockImplementation((
     _slaveId: string,
-    _holder: string,
     options?: { mode?: 'reuse' | 'new' }
   ) => Promise.resolve({
     id: options?.mode === 'new' ? 'session-2' : 'session-1',
@@ -193,7 +193,7 @@ describe('TerminalView split workbench', () => {
     fireEvent.click(screen.getByLabelText('打开同屏分屏'));
 
     await waitFor(() => {
-      expect(terminalApiMock.createTerminalSession).toHaveBeenCalledWith('vm1', 'Humphrey', {
+      expect(terminalApiMock.createTerminalSession).toHaveBeenCalledWith('vm1', {
         cwd: '/root/debug',
         mode: 'new'
       });
@@ -243,7 +243,6 @@ describe('TerminalView split workbench', () => {
     const onReleaseSlave = vi.fn();
     terminalApiMock.createTerminalSession.mockImplementation((
       _slaveId: string,
-      _holder: string,
       options?: { mode?: 'reuse' | 'new' }
     ) => Promise.resolve({
       id: options?.mode === 'new' ? 'session-2' : 'session-1',
@@ -288,7 +287,6 @@ describe('TerminalView split workbench', () => {
     let splitSessionCount = 0;
     terminalApiMock.createTerminalSession.mockImplementation((
       _slaveId: string,
-      _holder: string,
       options?: { mode?: 'reuse' | 'new' }
     ) => Promise.resolve({
       id: options?.mode === 'new' ? `session-split-${++splitSessionCount}` : `session-main-${++mainSessionCount}`,
@@ -321,7 +319,7 @@ describe('TerminalView split workbench', () => {
 
     rerender(
       <TerminalView
-        slaveSession={makeSlave({ mode: 'idle', holder: '' })}
+        slaveSession={makeSlave({ mode: 'idle', holder: '', holderEmail: '' })}
         currentUser="Humphrey"
         active={false}
         releaseNonce={1}
@@ -352,7 +350,7 @@ describe('TerminalView split workbench', () => {
       await new Promise((resolve) => window.setTimeout(resolve, 30));
     });
 
-    const splitCalls = terminalApiMock.createTerminalSession.mock.calls.filter((call) => call[2]?.mode === 'new');
+    const splitCalls = terminalApiMock.createTerminalSession.mock.calls.filter((call) => call[1]?.mode === 'new');
     expect(splitCalls).toHaveLength(1);
     expect(screen.getByTestId('sftp-toggle-button')).toHaveClass('active');
     expect(screen.getByTestId('mock-sftp-sidebar')).toBeInTheDocument();

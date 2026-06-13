@@ -5,11 +5,20 @@ import json
 import posixpath
 from datetime import datetime, timezone
 
-from fastapi import FastAPI, HTTPException, Query, WebSocket, WebSocketDisconnect
+from fastapi import Depends, FastAPI, HTTPException, Query, Request, Response, WebSocket, WebSocketDisconnect
 from fastapi.middleware.cors import CORSMiddleware
 
 from .agent_hub import AgentHub
-from .models import FileListResponse, FileMkdirRequest, FileReadResponse, FileWriteRequest, LockRequest, SlaveInfo, TakeoverRequest, TerminalSessionResponse
+from .auth import (
+    AuthError,
+    AuthService,
+    AuthenticatedUser,
+    cookie_secure_enabled,
+    session_cookie_name,
+    session_id_from_cookie_header,
+    session_ttl_seconds,
+)
+from .models import AuthUserResponse, FileListResponse, FileMkdirRequest, FileReadResponse, FileWriteRequest, LockRequest, LoginRequest, SlaveInfo, TakeoverRequest, TerminalSessionResponse
 from .slave_registry import SlaveRegistry
 
 ACTIVITY_POLL_INTERVAL = 12
@@ -30,6 +39,7 @@ app.add_middleware(
 
 registry = SlaveRegistry()
 hub = AgentHub()
+auth_service = AuthService()
 
 # 内存态审计（重启即丢，MVP 足够）：记录强制接管等高影响操作。
 AUDIT: list[dict] = []
@@ -78,13 +88,59 @@ def is_allowed_terminal_cwd(cwd: str, roots: list[str]) -> bool:
     return False
 
 
+def auth_user_response(user: AuthenticatedUser) -> AuthUserResponse:
+    return AuthUserResponse(email=user.email, displayName=user.display_name, roles=list(user.roles))
+
+
+async def get_current_user(request: Request) -> AuthenticatedUser:
+    user = auth_service.get_session_user(request.cookies.get(session_cookie_name()))
+    if not user:
+        raise HTTPException(status_code=401, detail="authentication required")
+    return user
+
+
+def get_websocket_user(websocket: WebSocket) -> AuthenticatedUser | None:
+    session_id = session_id_from_cookie_header(websocket.headers.get("cookie"))
+    return auth_service.get_session_user(session_id)
+
+
 @app.get("/api/health")
 async def health() -> dict:
     return {"ok": True}
 
 
+@app.post("/api/auth/login", response_model=AuthUserResponse)
+async def login(request: LoginRequest, response: Response) -> AuthUserResponse:
+    try:
+        user = auth_service.authenticate(request.email, request.password)
+    except AuthError as exc:
+        raise HTTPException(status_code=exc.status_code, detail=str(exc))
+    response.set_cookie(
+        key=session_cookie_name(),
+        value=auth_service.create_session(user),
+        httponly=True,
+        samesite="lax",
+        secure=cookie_secure_enabled(),
+        max_age=session_ttl_seconds(),
+        path="/",
+    )
+    return auth_user_response(user)
+
+
+@app.get("/api/auth/me", response_model=AuthUserResponse)
+async def me(user: AuthenticatedUser = Depends(get_current_user)) -> AuthUserResponse:
+    return auth_user_response(user)
+
+
+@app.post("/api/auth/logout")
+async def logout(request: Request, response: Response) -> dict:
+    auth_service.delete_session(request.cookies.get(session_cookie_name()))
+    response.delete_cookie(key=session_cookie_name(), path="/")
+    return {"ok": True}
+
+
 @app.get("/api/slaves", response_model=list[SlaveInfo])
-async def list_slaves() -> list[SlaveInfo]:
+async def list_slaves(_user: AuthenticatedUser = Depends(get_current_user)) -> list[SlaveInfo]:
     return registry.list_slaves()
 
 
@@ -98,9 +154,9 @@ async def _refresh_slave_activity(slave_id: str) -> SlaveInfo | None:
 
 
 @app.post("/api/slaves/{slave_id}/lock", response_model=SlaveInfo)
-async def lock_slave(slave_id: str, request: LockRequest) -> SlaveInfo:
+async def lock_slave(slave_id: str, request: LockRequest, user: AuthenticatedUser = Depends(get_current_user)) -> SlaveInfo:
     try:
-        return registry.lock(slave_id, request.holder, request.manualHoldReason)
+        return registry.lock(slave_id, user.display_name, user.email, request.manualHoldReason)
     except KeyError:
         raise HTTPException(status_code=404, detail="slave not found")
     except ValueError as exc:
@@ -108,9 +164,9 @@ async def lock_slave(slave_id: str, request: LockRequest) -> SlaveInfo:
 
 
 @app.delete("/api/slaves/{slave_id}/lock", response_model=SlaveInfo)
-async def unlock_slave(slave_id: str, holder: str = Query(...)) -> SlaveInfo:
+async def unlock_slave(slave_id: str, user: AuthenticatedUser = Depends(get_current_user)) -> SlaveInfo:
     try:
-        slave = registry.unlock(slave_id, holder)
+        slave = registry.unlock(slave_id, user.email)
     except KeyError:
         raise HTTPException(status_code=404, detail="slave not found")
     except ValueError as exc:
@@ -121,19 +177,19 @@ async def unlock_slave(slave_id: str, holder: str = Query(...)) -> SlaveInfo:
 
 
 @app.post("/api/slaves/{slave_id}/lock/takeover", response_model=SlaveInfo)
-async def takeover_slave(slave_id: str, request: TakeoverRequest) -> SlaveInfo:
+async def takeover_slave(slave_id: str, request: TakeoverRequest, user: AuthenticatedUser = Depends(get_current_user)) -> SlaveInfo:
     slave = registry.get(slave_id)
     if not slave:
         raise HTTPException(status_code=404, detail="slave not found")
     was_running = slave.mode == "running" or slave.processSignal != "none"
     takeover_reason = request.reason.strip()
-    close_reason = f"已被 {request.newHolder} 强制接管"
+    close_reason = f"已被 {user.display_name} 强制接管"
     if takeover_reason:
         close_reason = f"{close_reason}：{takeover_reason}"
     # 先杀前持有人全部 session（杜绝双写者），再转锁。
     await hub.close_slave_sessions(slave_id, close_reason)
     try:
-        prev_holder, slave = registry.takeover(slave_id, request.newHolder, takeover_reason)
+        prev_holder, prev_holder_email, slave = registry.takeover(slave_id, user.display_name, user.email, takeover_reason)
     except ValueError as exc:
         raise HTTPException(status_code=409, detail=str(exc))
     AUDIT.append({
@@ -141,7 +197,9 @@ async def takeover_slave(slave_id: str, request: TakeoverRequest) -> SlaveInfo:
         "action": "takeover",
         "slaveId": slave_id,
         "from": prev_holder,
-        "to": request.newHolder,
+        "fromEmail": prev_holder_email,
+        "to": user.display_name,
+        "toEmail": user.email,
         "reason": takeover_reason,
         "wasRunning": was_running,
     })
@@ -149,28 +207,28 @@ async def takeover_slave(slave_id: str, request: TakeoverRequest) -> SlaveInfo:
 
 
 @app.get("/api/slaves/{slave_id}/audit")
-async def list_audit(slave_id: str) -> dict:
+async def list_audit(slave_id: str, _user: AuthenticatedUser = Depends(get_current_user)) -> dict:
     return {"entries": [item for item in AUDIT if item["slaveId"] == slave_id]}
 
 
 @app.post("/api/slaves/{slave_id}/terminal/sessions", response_model=TerminalSessionResponse)
 async def create_terminal_session(
     slave_id: str,
-    holder: str = Query(...),
     mode: str = "reuse",
     cwd: str = "",
+    user: AuthenticatedUser = Depends(get_current_user),
 ) -> TerminalSessionResponse:
     slave = registry.get(slave_id)
     if not slave:
         raise HTTPException(status_code=404, detail="slave not found")
     if not hub.is_online(slave_id):
         raise HTTPException(status_code=503, detail="agent offline")
-    if not registry.can_write(slave_id, holder):
+    if not registry.can_write(slave_id, user.email):
         raise HTTPException(status_code=409, detail=f"slave is held by {slave.holder or 'another user'}")
     if mode not in {"reuse", "new"}:
         raise HTTPException(status_code=400, detail="terminal session mode must be reuse or new")
     if mode == "reuse":
-        session = hub.find_reusable_terminal_session(slave_id, holder)
+        session = hub.find_reusable_terminal_session(slave_id, user.email)
         if session:
             return TerminalSessionResponse(id=session.session_id, slaveId=slave_id, shell=session.shell, readOnly=False)
     shell = "powershell.exe" if "windows" in slave.system.lower() else "/bin/bash"
@@ -178,14 +236,24 @@ async def create_terminal_session(
     if not is_allowed_terminal_cwd(target_cwd, slave.allowedRoots):
         raise HTTPException(status_code=400, detail="terminal cwd is outside allowed roots")
     try:
-        session = await hub.create_terminal_session(slave_id, shell=shell, cwd=target_cwd, holder=holder, reusable=mode == "reuse")
+        session = await hub.create_terminal_session(
+            slave_id,
+            shell=shell,
+            cwd=target_cwd,
+            holder=user.display_name,
+            holder_email=user.email,
+            reusable=mode == "reuse",
+        )
     except RuntimeError as exc:
         raise HTTPException(status_code=503, detail=str(exc))
     return TerminalSessionResponse(id=session.session_id, slaveId=slave_id, shell=shell, readOnly=False)
 
 
 @app.delete("/api/terminal/{session_id}")
-async def close_terminal_session(session_id: str) -> dict:
+async def close_terminal_session(session_id: str, user: AuthenticatedUser = Depends(get_current_user)) -> dict:
+    session = hub.get_terminal_session(session_id)
+    if session and session.holder_email and session.holder_email != user.email:
+        raise HTTPException(status_code=403, detail="terminal session belongs to another user")
     await hub.close_terminal_session(session_id)
     return {"ok": True}
 
@@ -193,9 +261,18 @@ async def close_terminal_session(session_id: str) -> dict:
 @app.websocket("/api/terminal/{session_id}")
 async def terminal_ws(websocket: WebSocket, session_id: str) -> None:
     await websocket.accept()
+    user = get_websocket_user(websocket)
+    if not user:
+        await websocket.send_json({"type": "error", "message": "authentication required"})
+        await websocket.close()
+        return
     session = hub.get_terminal_session(session_id)
     if not session:
         await websocket.send_json({"type": "error", "message": "terminal session not found"})
+        await websocket.close()
+        return
+    if session.holder_email != user.email or not registry.can_write(session.slave_id, user.email):
+        await websocket.send_json({"type": "error", "message": "terminal session belongs to another user"})
         await websocket.close()
         return
     queue: "asyncio.Queue[dict[str, str]]" = asyncio.Queue()
@@ -248,31 +325,33 @@ async def terminal_ws(websocket: WebSocket, session_id: str) -> None:
 
 
 @app.get("/api/slaves/{slave_id}/files", response_model=FileListResponse)
-async def list_files(slave_id: str, path: str = Query("/")) -> FileListResponse:
-    payload = await _file_request(slave_id, "list", {"path": path})
+async def list_files(slave_id: str, path: str = Query("/"), user: AuthenticatedUser = Depends(get_current_user)) -> FileListResponse:
+    payload = await _file_request(slave_id, "list", {"path": path}, user)
     return FileListResponse(**payload)
 
 
 @app.get("/api/slaves/{slave_id}/files/read", response_model=FileReadResponse)
-async def read_file(slave_id: str, path: str = Query(...)) -> FileReadResponse:
-    payload = await _file_request(slave_id, "read", {"path": path})
+async def read_file(slave_id: str, path: str = Query(...), user: AuthenticatedUser = Depends(get_current_user)) -> FileReadResponse:
+    payload = await _file_request(slave_id, "read", {"path": path}, user)
     return FileReadResponse(**payload)
 
 
 @app.put("/api/slaves/{slave_id}/files/write")
-async def write_file(slave_id: str, request: FileWriteRequest) -> dict:
-    return await _file_request(slave_id, "write", request.model_dump())
+async def write_file(slave_id: str, request: FileWriteRequest, user: AuthenticatedUser = Depends(get_current_user)) -> dict:
+    return await _file_request(slave_id, "write", request.model_dump(), user)
 
 
 @app.post("/api/slaves/{slave_id}/files/mkdir")
-async def make_directory(slave_id: str, request: FileMkdirRequest) -> dict:
-    return await _file_request(slave_id, "mkdir", request.model_dump())
+async def make_directory(slave_id: str, request: FileMkdirRequest, user: AuthenticatedUser = Depends(get_current_user)) -> dict:
+    return await _file_request(slave_id, "mkdir", request.model_dump(), user)
 
 
-async def _file_request(slave_id: str, action: str, payload: dict) -> dict:
+async def _file_request(slave_id: str, action: str, payload: dict, user: AuthenticatedUser) -> dict:
     slave = registry.get(slave_id)
     if not slave:
         raise HTTPException(status_code=404, detail="slave not found")
+    if not registry.can_write(slave_id, user.email):
+        raise HTTPException(status_code=409, detail=f"slave is held by {slave.holder or 'another user'}")
     try:
         result = await hub.file_request(slave_id, action, payload)
     except RuntimeError as exc:
@@ -332,8 +411,8 @@ async def _activity_poll_loop() -> None:
 async def _terminal_session_renew_loop() -> None:
     while True:
         for session in hub.list_terminal_sessions():
-            if session.holder:
-                registry.renew(session.slave_id, session.holder)
+            if session.holder_email:
+                registry.renew(session.slave_id, session.holder_email)
         await asyncio.sleep(LOCK_RENEW_INTERVAL)
 
 

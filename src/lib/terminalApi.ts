@@ -1,4 +1,4 @@
-import type { SlaveSession } from '../types';
+import type { AuthUser, SlaveSession } from '../types';
 
 function defaultApiBase(): string {
   return `${window.location.protocol}//${window.location.hostname}:8008/api`;
@@ -61,18 +61,36 @@ export interface FolderUploadProgress {
   errors: Array<{ relativePath: string; message: string }>;
 }
 
+export class ApiError extends Error {
+  status: number;
+
+  constructor(status: number, message: string) {
+    super(message);
+    this.name = 'ApiError';
+    this.status = status;
+  }
+}
+
 async function fetchJson<T>(url: string, options?: RequestInit): Promise<T> {
   const controller = new AbortController();
   const timeout = window.setTimeout(() => controller.abort(), 12_000);
   try {
     const response = await fetch(url, {
+      credentials: 'include',
       headers: { 'Content-Type': 'application/json', ...options?.headers },
       ...options,
       signal: controller.signal
     });
     if (!response.ok) {
       const detail = await response.text();
-      throw new Error(detail || `HTTP ${response.status}`);
+      let message = detail || `HTTP ${response.status}`;
+      try {
+        const parsed = JSON.parse(detail) as { detail?: unknown };
+        if (parsed.detail) message = String(parsed.detail);
+      } catch {
+        // Keep the raw response text.
+      }
+      throw new ApiError(response.status, message);
     }
     return response.json() as Promise<T>;
   } catch (err) {
@@ -85,35 +103,52 @@ async function fetchJson<T>(url: string, options?: RequestInit): Promise<T> {
   }
 }
 
+export async function login(email: string, password: string): Promise<AuthUser> {
+  return fetchJson<AuthUser>(`${API_BASE}/auth/login`, {
+    method: 'POST',
+    body: JSON.stringify({ email, password })
+  });
+}
+
+export async function getCurrentUser(): Promise<AuthUser> {
+  return fetchJson<AuthUser>(`${API_BASE}/auth/me`);
+}
+
+export async function logout(): Promise<void> {
+  await fetchJson<{ ok: boolean }>(`${API_BASE}/auth/logout`, { method: 'POST' });
+}
+
 export async function listSlaves(): Promise<SlaveSession[]> {
   return fetchJson<SlaveSession[]>(`${API_BASE}/slaves`);
 }
 
-export async function lockSlave(slaveId: string, holder: string, manualHoldReason: string): Promise<SlaveSession> {
+export async function lockSlave(slaveId: string, manualHoldReason: string): Promise<SlaveSession> {
   return fetchJson<SlaveSession>(`${API_BASE}/slaves/${encodeURIComponent(slaveId)}/lock`, {
     method: 'POST',
-    body: JSON.stringify({ holder, manualHoldReason })
+    body: JSON.stringify({ manualHoldReason })
   });
 }
 
-export async function releaseSlave(slaveId: string, holder: string): Promise<SlaveSession> {
-  return fetchJson<SlaveSession>(`${API_BASE}/slaves/${encodeURIComponent(slaveId)}/lock?holder=${encodeURIComponent(holder)}`, {
+export async function releaseSlave(slaveId: string): Promise<SlaveSession> {
+  return fetchJson<SlaveSession>(`${API_BASE}/slaves/${encodeURIComponent(slaveId)}/lock`, {
     method: 'DELETE'
   });
 }
 
-export async function forceTakeover(slaveId: string, newHolder: string, reason: string): Promise<SlaveSession> {
+export async function forceTakeover(slaveId: string, reason: string): Promise<SlaveSession> {
   return fetchJson<SlaveSession>(`${API_BASE}/slaves/${encodeURIComponent(slaveId)}/lock/takeover`, {
     method: 'POST',
-    body: JSON.stringify({ newHolder, reason })
+    body: JSON.stringify({ reason })
   });
 }
 
-export async function createTerminalSession(slaveId: string, holder: string, options: CreateTerminalSessionOptions = {}): Promise<TerminalSessionResponse> {
-  const params = new URLSearchParams({ holder });
+export async function createTerminalSession(slaveId: string, options: CreateTerminalSessionOptions = {}): Promise<TerminalSessionResponse> {
+  const params = new URLSearchParams();
   if (options.mode) params.set('mode', options.mode);
   if (options.cwd) params.set('cwd', options.cwd);
-  return fetchJson<TerminalSessionResponse>(`${API_BASE}/slaves/${encodeURIComponent(slaveId)}/terminal/sessions?${params.toString()}`, {
+  const query = params.toString();
+  const suffix = query ? `?${query}` : '';
+  return fetchJson<TerminalSessionResponse>(`${API_BASE}/slaves/${encodeURIComponent(slaveId)}/terminal/sessions${suffix}`, {
     method: 'POST'
   });
 }

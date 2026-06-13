@@ -5,6 +5,7 @@ import time
 
 from server.app import main as app_main
 from server.app.agent_hub import AgentHub, TerminalSession, build_terminal_argv
+from server.app.auth import AuthenticatedUser
 from server.app.slave_registry import SlaveRegistry
 
 
@@ -33,9 +34,9 @@ class TerminalArgvTest(unittest.TestCase):
 
 class AgentHubSessionTest(unittest.IsolatedAsyncioTestCase):
     def _seed(self, hub: AgentHub) -> None:
-        hub._sessions["s1"] = TerminalSession("s1", "vm1", "a1", "/bin/bash", holder="Humphrey")
-        hub._sessions["s2"] = TerminalSession("s2", "vm1", "a2", "/bin/bash", holder="Humphrey")
-        hub._sessions["s3"] = TerminalSession("s3", "vm2", "a3", "/bin/bash", holder="Alice")
+        hub._sessions["s1"] = TerminalSession("s1", "vm1", "a1", "/bin/bash", holder="Humphrey", holder_email="humphrey@example.com")
+        hub._sessions["s2"] = TerminalSession("s2", "vm1", "a2", "/bin/bash", holder="Humphrey", holder_email="humphrey@example.com")
+        hub._sessions["s3"] = TerminalSession("s3", "vm2", "a3", "/bin/bash", holder="Alice", holder_email="alice@example.com")
 
     def test_list_slave_sessions_filters_by_slave(self):
         hub = AgentHub()
@@ -67,7 +68,7 @@ class AgentHubSessionTest(unittest.IsolatedAsyncioTestCase):
         hub = AgentHub()
         connection = hub.attach_agent("vm1", object())  # type: ignore[arg-type]
         connection.agent_to_center_session["a1"] = "s1"
-        hub._sessions["s1"] = TerminalSession("s1", "vm1", "a1", "/bin/bash", holder="Humphrey")
+        hub._sessions["s1"] = TerminalSession("s1", "vm1", "a1", "/bin/bash", holder="Humphrey", holder_email="humphrey@example.com")
         queue: asyncio.Queue[dict[str, str]] = asyncio.Queue()
         hub._sessions["s1"].output_queues.add(queue)
 
@@ -81,7 +82,7 @@ class AgentHubSessionTest(unittest.IsolatedAsyncioTestCase):
         hub = AgentHub()
         connection = hub.attach_agent("vm1", object())  # type: ignore[arg-type]
         connection.agent_to_center_session["a1"] = "s1"
-        hub._sessions["s1"] = TerminalSession("s1", "vm1", "a1", "/bin/bash", holder="Humphrey")
+        hub._sessions["s1"] = TerminalSession("s1", "vm1", "a1", "/bin/bash", holder="Humphrey", holder_email="humphrey@example.com")
         queue: asyncio.Queue[dict[str, str]] = asyncio.Queue()
         hub._sessions["s1"].output_queues.add(queue)
 
@@ -167,7 +168,7 @@ class AgentHubSessionTest(unittest.IsolatedAsyncioTestCase):
         hub = AgentHub()
         connection = hub.attach_agent("vm1", FakeWebSocket())
 
-        task = asyncio.create_task(hub.create_terminal_session("vm1", "/bin/bash", "/home/pzhou", holder="Humphrey"))
+        task = asyncio.create_task(hub.create_terminal_session("vm1", "/bin/bash", "/home/pzhou", holder="Humphrey", holder_email="humphrey@example.com"))
         await asyncio.sleep(0)
         request_id = connection.websocket.sent[0]["requestId"]
         await hub.handle_agent_message(connection, json.dumps({
@@ -186,7 +187,7 @@ class AgentHubSessionTest(unittest.IsolatedAsyncioTestCase):
         hub = AgentHub()
         connection = hub.attach_agent("vm1", FakeWebSocket())
 
-        task = asyncio.create_task(hub.create_terminal_session("vm1", "/bin/bash", "/home/pzhou", holder="Humphrey"))
+        task = asyncio.create_task(hub.create_terminal_session("vm1", "/bin/bash", "/home/pzhou", holder="Humphrey", holder_email="humphrey@example.com"))
         await asyncio.sleep(0)
         open_message = connection.websocket.sent[0]
         session_id = open_message["payload"]["sessionId"]
@@ -218,7 +219,7 @@ class AgentHubSessionTest(unittest.IsolatedAsyncioTestCase):
         hub = AgentHub()
         connection = hub.attach_agent("vm1", FakeWebSocket())
 
-        task = asyncio.create_task(hub.create_terminal_session("vm1", "/bin/bash", "/home/pzhou", holder="Humphrey"))
+        task = asyncio.create_task(hub.create_terminal_session("vm1", "/bin/bash", "/home/pzhou", holder="Humphrey", holder_email="humphrey@example.com"))
         await asyncio.sleep(0)
         open_message = connection.websocket.sent[0]
         center_session_id = open_message["payload"]["sessionId"]
@@ -251,7 +252,7 @@ class AgentHubSessionTest(unittest.IsolatedAsyncioTestCase):
     async def test_terminal_input_waits_for_short_ack(self):
         hub = AgentHub()
         connection = hub.attach_agent("vm1", FakeWebSocket())
-        hub._sessions["s1"] = TerminalSession("s1", "vm1", "a1", "/bin/bash", holder="Humphrey")
+        hub._sessions["s1"] = TerminalSession("s1", "vm1", "a1", "/bin/bash", holder="Humphrey", holder_email="humphrey@example.com")
 
         task = asyncio.create_task(hub.terminal_input("s1", "echo ok\n"))
         await asyncio.sleep(0)
@@ -297,8 +298,8 @@ class AgentHubSessionTest(unittest.IsolatedAsyncioTestCase):
         hub._sessions["s1"].created_at = 1.0
         hub._sessions["s2"].created_at = 2.0
 
-        self.assertEqual(hub.find_reusable_terminal_session("vm1", "Humphrey").session_id, "s2")
-        self.assertIsNone(hub.find_reusable_terminal_session("vm1", "Alice"))
+        self.assertEqual(hub.find_reusable_terminal_session("vm1", "humphrey@example.com").session_id, "s2")
+        self.assertIsNone(hub.find_reusable_terminal_session("vm1", "alice@example.com"))
         self.assertIsNone(hub.find_reusable_terminal_session("vm1", ""))
 
     def test_find_reusable_terminal_session_ignores_split_sessions(self):
@@ -308,13 +309,13 @@ class AgentHubSessionTest(unittest.IsolatedAsyncioTestCase):
         hub._sessions["s2"].created_at = 2.0
         hub._sessions["s2"].reusable = False
 
-        self.assertEqual(hub.find_reusable_terminal_session("vm1", "Humphrey").session_id, "s1")
+        self.assertEqual(hub.find_reusable_terminal_session("vm1", "humphrey@example.com").session_id, "s1")
 
     def test_stale_agent_disconnect_does_not_remove_new_connection(self):
         hub = AgentHub()
         old_connection = hub.attach_agent("vm2", object())  # type: ignore[arg-type]
         new_connection = hub.attach_agent("vm2", object())  # type: ignore[arg-type]
-        hub._sessions["s3"] = TerminalSession("s3", "vm2", "a3", "/bin/bash", holder="Alice")
+        hub._sessions["s3"] = TerminalSession("s3", "vm2", "a3", "/bin/bash", holder="Alice", holder_email="alice@example.com")
 
         self.assertFalse(hub.detach_agent("vm2", old_connection))
         self.assertTrue(hub.is_online("vm2"))
@@ -326,6 +327,9 @@ class AgentHubSessionTest(unittest.IsolatedAsyncioTestCase):
 
 
 class TerminalSessionRouteTest(unittest.IsolatedAsyncioTestCase):
+    def _user(self) -> AuthenticatedUser:
+        return AuthenticatedUser(email="humphrey@example.com", display_name="Humphrey")
+
     async def test_create_terminal_session_reuses_existing_holder_session(self):
         old_registry = app_main.registry
         old_hub = app_main.hub
@@ -343,11 +347,11 @@ class TerminalSessionRouteTest(unittest.IsolatedAsyncioTestCase):
             app_main.registry = SlaveRegistry()
             app_main.hub = AgentHub()
             app_main.registry.mark_agent_online("vm1", "test-agent", ["/tmp"])
-            app_main.registry.lock("vm1", "Humphrey")
+            app_main.registry.lock("vm1", "Humphrey", "humphrey@example.com")
             app_main.hub._agents["vm1"] = FakeAgent()  # type: ignore[assignment]
 
-            first = await app_main.create_terminal_session("vm1", "Humphrey")
-            second = await app_main.create_terminal_session("vm1", "Humphrey")
+            first = await app_main.create_terminal_session("vm1", user=self._user())
+            second = await app_main.create_terminal_session("vm1", user=self._user())
 
             self.assertEqual(first.id, second.id)
             self.assertEqual(len(app_main.hub.list_terminal_sessions()), 1)
@@ -372,13 +376,13 @@ class TerminalSessionRouteTest(unittest.IsolatedAsyncioTestCase):
             app_main.registry = SlaveRegistry()
             app_main.hub = AgentHub()
             app_main.registry.mark_agent_online("vm1", "test-agent", ["/tmp", "/root/debug"])
-            app_main.registry.lock("vm1", "Humphrey")
+            app_main.registry.lock("vm1", "Humphrey", "humphrey@example.com")
             fake_agent = FakeAgent()
             app_main.hub._agents["vm1"] = fake_agent  # type: ignore[assignment]
 
-            primary = await app_main.create_terminal_session("vm1", "Humphrey")
-            split = await app_main.create_terminal_session("vm1", "Humphrey", mode="new", cwd="/root/debug/case")
-            resumed = await app_main.create_terminal_session("vm1", "Humphrey")
+            primary = await app_main.create_terminal_session("vm1", user=self._user())
+            split = await app_main.create_terminal_session("vm1", mode="new", cwd="/root/debug/case", user=self._user())
+            resumed = await app_main.create_terminal_session("vm1", user=self._user())
 
             self.assertNotEqual(primary.id, split.id)
             self.assertEqual(primary.id, resumed.id)
@@ -403,11 +407,11 @@ class TerminalSessionRouteTest(unittest.IsolatedAsyncioTestCase):
             app_main.registry = SlaveRegistry()
             app_main.hub = AgentHub()
             app_main.registry.mark_agent_online("vm1", "test-agent", ["/root/debug"])
-            app_main.registry.lock("vm1", "Humphrey")
+            app_main.registry.lock("vm1", "Humphrey", "humphrey@example.com")
             app_main.hub._agents["vm1"] = FakeAgent()  # type: ignore[assignment]
 
             with self.assertRaises(app_main.HTTPException) as context:
-                await app_main.create_terminal_session("vm1", "Humphrey", mode="new", cwd="/etc")
+                await app_main.create_terminal_session("vm1", mode="new", cwd="/etc", user=self._user())
 
             self.assertEqual(context.exception.status_code, 400)
             self.assertEqual(len(app_main.hub.list_terminal_sessions()), 0)

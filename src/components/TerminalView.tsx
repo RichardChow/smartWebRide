@@ -84,7 +84,7 @@ export function TerminalView({ slaveSession, currentUser, forceReadOnly = false,
     if (readOnly) return;
 
     setResolving(true);
-    createTerminalSession(slaveSession.slaveId, currentUser)
+    createTerminalSession(slaveSession.slaveId)
       .then((session) => {
         setTab(buildTerminalTab(session, slaveSession));
       })
@@ -260,7 +260,7 @@ function TerminalPanel({
     setSplitError('');
     setCreatingSplit(true);
     try {
-      const session = await createTerminalSession(tab.slaveId, currentUser, {
+      const session = await createTerminalSession(tab.slaveId, {
         cwd: terminalCwd,
         mode: 'new'
       });
@@ -270,7 +270,7 @@ function TerminalPanel({
     } finally {
       setCreatingSplit(false);
     }
-  }, [creatingSplit, currentUser, slaveSession, splitFilePath, splitTerminalTab, tab.slaveId, terminalCwd]);
+  }, [creatingSplit, slaveSession, splitFilePath, splitTerminalTab, tab.slaveId, terminalCwd]);
 
   useEffect(() => {
     if (splitRequestNonce <= handledSplitRequestRef.current) return;

@@ -34,6 +34,7 @@ class TerminalSession:
     agent_session_id: str
     shell: str
     holder: str = ""
+    holder_email: str = ""
     reusable: bool = True
     output_queues: set[asyncio.Queue[TerminalQueueItem]] = field(default_factory=set)
     created_at: float = field(default_factory=time.time)
@@ -236,11 +237,27 @@ class AgentHub:
         for queue in list(session.output_queues):
             await queue.put(event)
 
-    async def create_terminal_session(self, slave_id: str, shell: str, cwd: str, holder: str = "", reusable: bool = True) -> TerminalSession:
+    async def create_terminal_session(
+        self,
+        slave_id: str,
+        shell: str,
+        cwd: str,
+        holder: str = "",
+        holder_email: str = "",
+        reusable: bool = True,
+    ) -> TerminalSession:
         agent = self._require_agent(slave_id)
         session_id = uuid.uuid4().hex[:12]
         argv = build_terminal_argv(shell)
-        session = TerminalSession(session_id=session_id, slave_id=slave_id, agent_session_id=session_id, shell=shell, holder=holder, reusable=reusable)
+        session = TerminalSession(
+            session_id=session_id,
+            slave_id=slave_id,
+            agent_session_id=session_id,
+            shell=shell,
+            holder=holder,
+            holder_email=holder_email,
+            reusable=reusable,
+        )
         self._sessions[session_id] = session
         agent.agent_to_center_session[session_id] = session_id
         try:
@@ -265,13 +282,13 @@ class AgentHub:
     def get_terminal_session(self, session_id: str) -> TerminalSession | None:
         return self._sessions.get(session_id)
 
-    def find_reusable_terminal_session(self, slave_id: str, holder: str) -> TerminalSession | None:
-        if not holder:
+    def find_reusable_terminal_session(self, slave_id: str, holder_email: str) -> TerminalSession | None:
+        if not holder_email:
             return None
         candidates = [
             session
             for session in self._sessions.values()
-            if session.slave_id == slave_id and session.holder == holder and session.reusable
+            if session.slave_id == slave_id and session.holder_email == holder_email and session.reusable
         ]
         return max(candidates, key=lambda session: session.created_at, default=None)
 

@@ -105,6 +105,7 @@ export interface SlaveSession {
   robotVersion: string;
   mode: 'idle' | 'held' | 'running' | 'offline';
   holder: string;
+  holderEmail: string;
   heartbeatAt: string;
   expiresAt: string;
   manualHoldReason: string;
@@ -120,6 +121,12 @@ export interface SlaveSession {
     terminal: boolean;
     killProcess: boolean;
   };
+}
+
+export interface AuthUser {
+  email: string;
+  displayName: string;
+  roles: string[];
 }
 
 export interface TerminalSession {

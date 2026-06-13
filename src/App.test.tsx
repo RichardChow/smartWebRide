@@ -1,13 +1,29 @@
 import { fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
-import type { SlaveSession } from './types';
+import type { AuthUser, SlaveSession } from './types';
 
-const apiMocks = vi.hoisted(() => ({
-  forceTakeover: vi.fn(),
-  listSlaves: vi.fn(),
-  lockSlave: vi.fn(),
-  releaseSlave: vi.fn()
-}));
+const apiMocks = vi.hoisted(() => {
+  class ApiError extends Error {
+    status: number;
+
+    constructor(status: number, message: string) {
+      super(message);
+      this.name = 'ApiError';
+      this.status = status;
+    }
+  }
+
+  return {
+    ApiError,
+    forceTakeover: vi.fn(),
+    getCurrentUser: vi.fn(),
+    listSlaves: vi.fn(),
+    lockSlave: vi.fn(),
+    login: vi.fn(),
+    logout: vi.fn(),
+    releaseSlave: vi.fn()
+  };
+});
 
 vi.mock('./lib/terminalApi', () => apiMocks);
 
@@ -64,6 +80,12 @@ vi.mock('./components/TerminalView', () => ({
 
 import { App } from './App';
 
+const humphrey: AuthUser = {
+  email: 'humphrey@example.com',
+  displayName: 'Humphrey',
+  roles: ['tester']
+};
+
 function makeSlave(overrides: Partial<SlaveSession> = {}): SlaveSession {
   return {
     slaveId: 'vm1',
@@ -76,6 +98,7 @@ function makeSlave(overrides: Partial<SlaveSession> = {}): SlaveSession {
     robotVersion: 'Robot Framework 7.4.2',
     mode: 'held',
     holder: 'humphrey1',
+    holderEmail: 'humphrey1@example.com',
     heartbeatAt: new Date().toISOString(),
     expiresAt: new Date(Date.now() + 300_000).toISOString(),
     manualHoldReason: 'Web SSH 调试锁',
@@ -94,17 +117,33 @@ function makeSlave(overrides: Partial<SlaveSession> = {}): SlaveSession {
   };
 }
 
-describe('App takeover flow', () => {
+describe('App auth and slave flows', () => {
   beforeEach(() => {
-    sessionStorage.clear();
     vi.clearAllMocks();
     window.history.pushState(null, '', '/');
+    apiMocks.getCurrentUser.mockResolvedValue(humphrey);
+  });
+
+  it('renders login form when unauthenticated and logs in with email/password', async () => {
+    apiMocks.getCurrentUser.mockRejectedValue(new apiMocks.ApiError(401, 'authentication required'));
+    apiMocks.login.mockResolvedValue(humphrey);
+    apiMocks.listSlaves.mockResolvedValue([makeSlave({ mode: 'idle', holder: '', holderEmail: '' })]);
+
+    render(<App />);
+
+    fireEvent.change(await screen.findByLabelText('邮箱'), { target: { value: 'humphrey@example.com' } });
+    fireEvent.change(screen.getByLabelText('密码'), { target: { value: '123456' } });
+    fireEvent.click(screen.getByRole('button', { name: '进入' }));
+
+    await screen.findByRole('button', { name: '进入终端' });
+    expect(apiMocks.login).toHaveBeenCalledWith('humphrey@example.com', '123456');
   });
 
   it('enters writable terminal from the takeover response instead of stale slave state', async () => {
-    const heldByOther = makeSlave();
+    const heldByOther = makeSlave({ holder: 'Alice', holderEmail: 'alice@example.com' });
     const takenByCurrentUser = makeSlave({
       holder: 'Humphrey',
+      holderEmail: 'humphrey@example.com',
       manualHoldReason: '紧急调试'
     });
     apiMocks.listSlaves.mockResolvedValue([heldByOther]);
@@ -118,12 +157,12 @@ describe('App takeover flow', () => {
       expect(screen.getByTestId('terminal-view')).toHaveAttribute('data-readonly', 'false');
     });
     expect(screen.getByTestId('terminal-view')).toHaveAttribute('data-holder', 'Humphrey');
-    expect(apiMocks.forceTakeover).toHaveBeenCalledWith('vm1', 'Humphrey', '紧急调试');
+    expect(apiMocks.forceTakeover).toHaveBeenCalledWith('vm1', '紧急调试');
   });
 
   it('returns to the slave list when releasing from terminal', async () => {
-    const heldByCurrentUser = makeSlave({ holder: 'Humphrey' });
-    const released = makeSlave({ mode: 'idle', holder: '', expiresAt: '', manualHoldReason: '' });
+    const heldByCurrentUser = makeSlave({ holder: 'Humphrey', holderEmail: 'humphrey@example.com' });
+    const released = makeSlave({ mode: 'idle', holder: '', holderEmail: '', expiresAt: '', manualHoldReason: '' });
     apiMocks.listSlaves.mockResolvedValue([heldByCurrentUser]);
     apiMocks.releaseSlave.mockResolvedValue(released);
 
@@ -136,11 +175,11 @@ describe('App takeover flow', () => {
     await waitFor(() => {
       expect(screen.getByTestId('terminal-view').parentElement).toHaveStyle({ display: 'none' });
     });
-    expect(apiMocks.releaseSlave).toHaveBeenCalledWith('vm1', 'Humphrey');
+    expect(apiMocks.releaseSlave).toHaveBeenCalledWith('vm1');
   });
 
   it('keeps the default home route separate from the hero preview route', async () => {
-    apiMocks.listSlaves.mockResolvedValue([makeSlave({ mode: 'idle', holder: '' })]);
+    apiMocks.listSlaves.mockResolvedValue([makeSlave({ mode: 'idle', holder: '', holderEmail: '' })]);
 
     render(<App />);
 
@@ -149,9 +188,9 @@ describe('App takeover flow', () => {
   });
 
   it('renders the hero preview route without changing slave actions', async () => {
-    const idleSlave = makeSlave({ mode: 'idle', holder: '' });
+    const idleSlave = makeSlave({ mode: 'idle', holder: '', holderEmail: '' });
     apiMocks.listSlaves.mockResolvedValue([idleSlave]);
-    apiMocks.lockSlave.mockResolvedValue(makeSlave({ holder: 'Humphrey' }));
+    apiMocks.lockSlave.mockResolvedValue(makeSlave({ holder: 'Humphrey', holderEmail: 'humphrey@example.com' }));
     window.history.pushState(null, '', '/preview/home-hero');
 
     render(<App />);
@@ -162,5 +201,6 @@ describe('App takeover flow', () => {
     await waitFor(() => {
       expect(screen.getByTestId('terminal-view')).toHaveAttribute('data-readonly', 'false');
     });
+    expect(apiMocks.lockSlave).toHaveBeenCalledWith('vm1', 'Web SSH 调试锁');
   });
 });

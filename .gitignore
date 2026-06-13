@@ -16,6 +16,7 @@ public/fixtures/generated-fixtures.json
 docs/
 rules/
 server/config/slaves.json
+server/config/users.json
 scripts/swr-restart-vm*.sh
 *.log
 *.pid

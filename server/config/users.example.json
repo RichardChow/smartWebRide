@@ -1,0 +1,11 @@
+{
+  "users": [
+    {
+      "email": "user@example.com",
+      "displayName": "ExampleUser",
+      "passwordSalt": "00112233445566778899aabbccddeeff",
+      "passwordHash": "replace-with-pbkdf2-sha256-hex",
+      "roles": ["tester"]
+    }
+  ]
+}

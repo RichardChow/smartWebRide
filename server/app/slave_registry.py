@@ -75,7 +75,7 @@ class SlaveRegistry:
         return self._slaves.get(slave_id)
 
     def _is_expired(self, slave: SlaveInfo) -> bool:
-        if not slave.holder or not slave.expiresAt:
+        if not slave.holderEmail or not slave.expiresAt:
             return False
         try:
             return utc_now() > datetime.fromisoformat(slave.expiresAt)
@@ -87,15 +87,16 @@ class SlaveRegistry:
             slave.mode = "offline"
         elif slave.processSignal != "none":
             slave.mode = "running"
-        elif slave.holder:
+        elif slave.holderEmail:
             slave.mode = "held"
         else:
             slave.mode = "idle"
 
     def _sweep(self, slave: SlaveInfo) -> None:
         # 自动过期门控：仅当交互锁已过期且无后台活跃（processSignal == none）时才释放锁。
-        if slave.holder and self._is_expired(slave) and slave.processSignal == "none":
+        if slave.holderEmail and self._is_expired(slave) and slave.processSignal == "none":
             slave.holder = ""
+            slave.holderEmail = ""
             slave.expiresAt = ""
             slave.manualHoldReason = ""
         self._recompute_mode(slave)
@@ -154,59 +155,63 @@ class SlaveRegistry:
         slave.heartbeatAt = utc_now().isoformat()
         self._recompute_mode(slave)
 
-    def lock(self, slave_id: str, holder: str, reason: str = "") -> SlaveInfo:
+    def lock(self, slave_id: str, holder: str, holder_email: str, reason: str = "") -> SlaveInfo:
         slave = self._require(slave_id)
         self._sweep(slave)
         if not slave.agentVersion:
             raise ValueError("slave is offline")
-        if slave.holder and slave.holder != holder:
+        if slave.holderEmail and slave.holderEmail != holder_email:
             raise ValueError(f"slave is held by {slave.holder}")
         slave.holder = holder
+        slave.holderEmail = holder_email
         slave.manualHoldReason = reason
         slave.heartbeatAt = utc_now().isoformat()
         slave.expiresAt = (utc_now() + LOCK_TTL).isoformat()
         self._recompute_mode(slave)
         return slave
 
-    def unlock(self, slave_id: str, holder: str) -> SlaveInfo:
+    def unlock(self, slave_id: str, holder_email: str) -> SlaveInfo:
         slave = self._require(slave_id)
-        if slave.holder and slave.holder != holder:
+        if slave.holderEmail and slave.holderEmail != holder_email:
             raise ValueError(f"slave is held by {slave.holder}")
         slave.holder = ""
+        slave.holderEmail = ""
         slave.expiresAt = ""
         slave.manualHoldReason = ""
         self._recompute_mode(slave)
         return slave
 
-    def can_write(self, slave_id: str, holder: str) -> bool:
+    def can_write(self, slave_id: str, holder_email: str) -> bool:
         # 该 holder 当前是否持有有效（未过期）写锁。先 sweep 清掉过期锁。
         slave = self._slaves.get(slave_id)
         if not slave:
             return False
         self._sweep(slave)
-        return bool(holder) and slave.holder == holder
+        return bool(holder_email) and slave.holderEmail == holder_email
 
-    def renew(self, slave_id: str, holder: str) -> None:
+    def renew(self, slave_id: str, holder_email: str) -> None:
         # 终端 WS 活跃续租：仅持有人本人可续，holder 不匹配静默忽略。
         slave = self._slaves.get(slave_id)
-        if not slave or slave.holder != holder:
+        if not slave or slave.holderEmail != holder_email:
             return
         slave.expiresAt = (utc_now() + LOCK_TTL).isoformat()
         slave.heartbeatAt = utc_now().isoformat()
 
-    def takeover(self, slave_id: str, new_holder: str, reason: str = "") -> tuple[str, SlaveInfo]:
+    def takeover(self, slave_id: str, new_holder: str, new_holder_email: str, reason: str = "") -> tuple[str, str, SlaveInfo]:
         # 强制接管：无视原持有人与过期，直接转锁。调用方需先关掉原持有人 session。
         slave = self._require(slave_id)
         self._sweep(slave)
         if not slave.agentVersion:
             raise ValueError("slave is offline")
         prev_holder = slave.holder
+        prev_holder_email = slave.holderEmail
         slave.holder = new_holder
+        slave.holderEmail = new_holder_email
         slave.manualHoldReason = reason
         slave.heartbeatAt = utc_now().isoformat()
         slave.expiresAt = (utc_now() + LOCK_TTL).isoformat()
         self._recompute_mode(slave)
-        return prev_holder, slave
+        return prev_holder, prev_holder_email, slave
 
     def update_activity(self, slave_id: str, robot_running: bool, run_id: str = "") -> None:
         # 后台活跃信号（Center 轮询 Agent 得到）：写 processSignal/activeRunId，刷新过期门控与 mode。

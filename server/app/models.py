@@ -23,6 +23,7 @@ class SlaveInfo(BaseModel):
     robotVersion: str = ""
     mode: str = "offline"
     holder: str = ""
+    holderEmail: str = ""
     heartbeatAt: str = ""
     expiresAt: str = ""
     manualHoldReason: str = ""
@@ -33,13 +34,22 @@ class SlaveInfo(BaseModel):
     capabilities: SlaveCapabilities = Field(default_factory=SlaveCapabilities)
 
 
+class LoginRequest(BaseModel):
+    email: str
+    password: str
+
+
+class AuthUserResponse(BaseModel):
+    email: str
+    displayName: str
+    roles: list[str] = Field(default_factory=list)
+
+
 class LockRequest(BaseModel):
-    holder: str
     manualHoldReason: str = ""
 
 
 class TakeoverRequest(BaseModel):
-    newHolder: str
     reason: str = ""
 
 

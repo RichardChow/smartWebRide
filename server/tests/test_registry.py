@@ -10,6 +10,10 @@ def _expire(registry: SlaveRegistry, slave_id: str) -> None:
     registry.get(slave_id).expiresAt = (utc_now() - timedelta(minutes=1)).isoformat()
 
 
+def _lock(registry: SlaveRegistry, slave_id: str = "vm1", holder: str = "Humphrey", email: str = "humphrey@example.com") -> None:
+    registry.lock(slave_id, holder, email)
+
+
 class SlaveRegistryTest(unittest.TestCase):
     def test_agent_online_changes_mode_to_idle(self):
         registry = SlaveRegistry()
@@ -22,19 +26,20 @@ class SlaveRegistryTest(unittest.TestCase):
     def test_lock_rejects_second_holder(self):
         registry = SlaveRegistry()
         registry.mark_agent_online("vm1", "test-agent")
-        registry.lock("vm1", "Humphrey")
+        _lock(registry)
         with self.assertRaises(ValueError):
-            registry.lock("vm1", "Alice")
+            registry.lock("vm1", "Alice", "alice@example.com")
 
     def test_unlock_releases_holder_and_returns_to_idle(self):
         registry = SlaveRegistry()
         registry.mark_agent_online("vm1", "test-agent")
-        registry.lock("vm1", "Humphrey")
+        _lock(registry)
 
-        slave = registry.unlock("vm1", "Humphrey")
+        slave = registry.unlock("vm1", "humphrey@example.com")
 
         self.assertEqual(slave.mode, "idle")
         self.assertEqual(slave.holder, "")
+        self.assertEqual(slave.holderEmail, "")
         self.assertEqual(slave.expiresAt, "")
 
     def test_loads_slaves_from_config_file(self):
@@ -63,55 +68,59 @@ class SlaveRegistryTest(unittest.TestCase):
     def test_expired_lock_allows_new_holder(self):
         registry = SlaveRegistry()
         registry.mark_agent_online("vm1", "test-agent")
-        registry.lock("vm1", "Humphrey")
+        _lock(registry)
         _expire(registry, "vm1")
-        slave = registry.lock("vm1", "Alice")  # 过期且无活跃 → 可被抢
+        slave = registry.lock("vm1", "Alice", "alice@example.com")  # 过期且无活跃 -> 可被抢
         self.assertEqual(slave.holder, "Alice")
+        self.assertEqual(slave.holderEmail, "alice@example.com")
 
     def test_running_blocks_expiry(self):
         registry = SlaveRegistry()
         registry.mark_agent_online("vm1", "test-agent")
-        registry.lock("vm1", "Humphrey")
+        _lock(registry)
         _expire(registry, "vm1")
         registry.update_activity("vm1", True, "1234")  # 后台 Robot 在跑
         with self.assertRaises(ValueError):
-            registry.lock("vm1", "Alice")
+            registry.lock("vm1", "Alice", "alice@example.com")
         self.assertEqual(registry.get("vm1").holder, "Humphrey")
+        self.assertEqual(registry.get("vm1").holderEmail, "humphrey@example.com")
 
     def test_renew_pushes_expiry(self):
         registry = SlaveRegistry()
         registry.mark_agent_online("vm1", "test-agent")
-        registry.lock("vm1", "Humphrey")
+        _lock(registry)
         _expire(registry, "vm1")
-        registry.renew("vm1", "Humphrey")
+        registry.renew("vm1", "humphrey@example.com")
         self.assertFalse(registry._is_expired(registry.get("vm1")))
 
     def test_renew_ignores_other_holder(self):
         registry = SlaveRegistry()
         registry.mark_agent_online("vm1", "test-agent")
-        registry.lock("vm1", "Humphrey")
+        _lock(registry)
         before = registry.get("vm1").expiresAt
-        registry.renew("vm1", "Alice")
+        registry.renew("vm1", "alice@example.com")
         self.assertEqual(registry.get("vm1").expiresAt, before)
 
     def test_takeover_transfers_and_returns_prev_holder(self):
         registry = SlaveRegistry()
         registry.mark_agent_online("vm1", "test-agent")
-        registry.lock("vm1", "Humphrey")
-        prev, slave = registry.takeover("vm1", "Alice", "需要紧急调试")
+        _lock(registry)
+        prev, prev_email, slave = registry.takeover("vm1", "Alice", "alice@example.com", "需要紧急调试")
         self.assertEqual(prev, "Humphrey")
+        self.assertEqual(prev_email, "humphrey@example.com")
         self.assertEqual(slave.holder, "Alice")
+        self.assertEqual(slave.holderEmail, "alice@example.com")
         self.assertEqual(slave.mode, "held")
         self.assertEqual(slave.manualHoldReason, "需要紧急调试")
 
     def test_can_write_only_for_valid_holder(self):
         registry = SlaveRegistry()
         registry.mark_agent_online("vm1", "test-agent")
-        registry.lock("vm1", "Humphrey")
-        self.assertTrue(registry.can_write("vm1", "Humphrey"))
-        self.assertFalse(registry.can_write("vm1", "Alice"))
+        _lock(registry)
+        self.assertTrue(registry.can_write("vm1", "humphrey@example.com"))
+        self.assertFalse(registry.can_write("vm1", "alice@example.com"))
         _expire(registry, "vm1")
-        self.assertFalse(registry.can_write("vm1", "Humphrey"))
+        self.assertFalse(registry.can_write("vm1", "humphrey@example.com"))
 
     def test_update_activity_sets_running_when_unheld(self):
         registry = SlaveRegistry()
@@ -125,19 +134,20 @@ class SlaveRegistryTest(unittest.TestCase):
     def test_update_activity_sets_running_while_preserving_holder(self):
         registry = SlaveRegistry()
         registry.mark_agent_online("vm1", "test-agent")
-        registry.lock("vm1", "Humphrey")
+        _lock(registry)
 
         registry.update_activity("vm1", True, "999")
 
         slave = registry.get("vm1")
         self.assertEqual(slave.mode, "running")
         self.assertEqual(slave.holder, "Humphrey")
+        self.assertEqual(slave.holderEmail, "humphrey@example.com")
         self.assertEqual(slave.processSignal, "robot")
 
     def test_lock_rejects_when_agent_offline(self):
         registry = SlaveRegistry()
         with self.assertRaises(ValueError):
-            registry.lock("vm1", "Humphrey")  # 默认 agentVersion 空 = 离线
+            registry.lock("vm1", "Humphrey", "humphrey@example.com")  # 默认 agentVersion 空 = 离线
 
     def test_mark_agent_seen_refreshes_connected_agent_heartbeat(self):
         registry = SlaveRegistry()

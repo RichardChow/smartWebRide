@@ -1,34 +1,22 @@
-import { Server, UserRound } from 'lucide-react';
+import { LogOut, Server, UserRound } from 'lucide-react';
 import { useEffect, useMemo, useState } from 'react';
 import { HomeHeroPreview } from './components/HomeHeroPreview';
+import { LoginView } from './components/LoginView';
 import { SlaveStatusHome } from './components/SlaveStatusHome';
 import { TerminalView } from './components/TerminalView';
 import { slaveSessions as initialSlaveSessions } from './data/mockRuntime';
-import { forceTakeover, listSlaves, lockSlave, releaseSlave } from './lib/terminalApi';
+import { ApiError, forceTakeover, getCurrentUser, listSlaves, lockSlave, login, logout, releaseSlave } from './lib/terminalApi';
 import { canOpenWritableTerminal } from './lib/terminalLogic';
-import type { AppView, SlaveSession } from './types';
+import type { AppView, AuthUser, SlaveSession } from './types';
 
-function loadCurrentUser(): string {
-  return sessionStorage.getItem('swr-user') || 'Humphrey';
-}
-
-function renewSessionLock(session: SlaveSession, currentUser: string): SlaveSession {
-  const now = Date.now();
-  return {
-    ...session,
-    mode: 'held',
-    holder: currentUser,
-    heartbeatAt: new Date(now).toISOString(),
-    expiresAt: new Date(now + 15 * 60_000).toISOString(),
-    manualHoldReason: session.manualHoldReason || '已获取调试锁，Agent 心跳续租中',
-    activeRunId: '',
-    processSignal: 'none'
-  };
+function messageFromError(err: unknown): string {
+  return err instanceof Error ? err.message : String(err);
 }
 
 export function App() {
   const isHomeHeroPreview = window.location.pathname === '/preview/home-hero';
-  const [currentUser, setCurrentUser] = useState(loadCurrentUser);
+  const [authUser, setAuthUser] = useState<AuthUser | null>(null);
+  const [authChecked, setAuthChecked] = useState(false);
   const [activeView, setActiveView] = useState<AppView>('slaves');
   const [slaveSessions, setSlaveSessions] = useState<SlaveSession[]>(initialSlaveSessions);
   const [activeSlaveId, setActiveSlaveId] = useState(initialSlaveSessions[0]?.slaveId ?? '');
@@ -37,6 +25,7 @@ export function App() {
   const [releaseNonce, setReleaseNonce] = useState(0);
   const [centerStatus, setCenterStatus] = useState('正在读取 Center /api/slaves...');
 
+  const currentUser = authUser?.displayName ?? '';
   const activeSlave = useMemo(
     () => slaveSessions.find((session) => session.slaveId === activeSlaveId) ?? null,
     [activeSlaveId, slaveSessions]
@@ -46,7 +35,43 @@ export function App() {
     setSlaveSessions((current) => current.map((session) => (session.slaveId === nextSession.slaveId ? nextSession : session)));
   }
 
+  function handleUnauthorized(err: unknown): boolean {
+    if (err instanceof ApiError && err.status === 401) {
+      setAuthUser(null);
+      setReadOnlyMode(false);
+      setActiveView('slaves');
+      setTerminalMounted(false);
+      setCenterStatus('登录已过期，请重新登录。');
+      return true;
+    }
+    return false;
+  }
+
   useEffect(() => {
+    let cancelled = false;
+
+    getCurrentUser()
+      .then((user) => {
+        if (!cancelled) setAuthUser(user);
+      })
+      .catch((err: unknown) => {
+        if (cancelled) return;
+        if (!(err instanceof ApiError && err.status === 401)) {
+          setCenterStatus(`Center 认证接口暂不可用：${messageFromError(err)}`);
+        }
+        setAuthUser(null);
+      })
+      .finally(() => {
+        if (!cancelled) setAuthChecked(true);
+      });
+
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
+  useEffect(() => {
+    if (!authUser || activeView !== 'slaves') return undefined;
     let cancelled = false;
 
     async function refreshSlaves() {
@@ -60,12 +85,10 @@ export function App() {
         }
       } catch (err) {
         if (cancelled) return;
-        const message = err instanceof Error ? err.message : String(err);
-        setCenterStatus(`Center 暂不可用，当前显示本地示例数据：${message}`);
+        if (handleUnauthorized(err)) return;
+        setCenterStatus(`Center 暂不可用，当前显示本地示例数据：${messageFromError(err)}`);
       }
     }
-
-    if (activeView !== 'slaves') return undefined;
 
     void refreshSlaves();
     const timer = window.setInterval(refreshSlaves, 5_000);
@@ -73,7 +96,29 @@ export function App() {
       cancelled = true;
       window.clearInterval(timer);
     };
-  }, [activeSlaveId, activeView]);
+  }, [activeSlaveId, activeView, authUser]);
+
+  async function handleLogin(email: string, password: string) {
+    const user = await login(email, password);
+    setAuthUser(user);
+    setAuthChecked(true);
+    setReadOnlyMode(false);
+    setActiveView('slaves');
+    setTerminalMounted(false);
+    setCenterStatus('登录成功，正在读取 Slave 状态...');
+  }
+
+  async function handleLogout() {
+    if (activeSlave && currentUser && activeSlave.holder === currentUser) {
+      await releaseSlave(activeSlave.slaveId).catch(() => undefined);
+    }
+    await logout().catch(() => undefined);
+    setAuthUser(null);
+    setReadOnlyMode(false);
+    setActiveView('slaves');
+    setTerminalMounted(false);
+    setCenterStatus('已退出登录。');
+  }
 
   async function enterSlave(slaveId: string, readOnly: boolean) {
     const session = slaveSessions.find((item) => item.slaveId === slaveId);
@@ -93,20 +138,14 @@ export function App() {
     }
 
     try {
-      const lockedSession = await lockSlave(slaveId, currentUser, 'Web SSH 调试锁');
+      const lockedSession = await lockSlave(slaveId, 'Web SSH 调试锁');
       updateSlaveSession(lockedSession);
       setReadOnlyMode(false);
     } catch (err) {
-      const message = err instanceof Error ? err.message : String(err);
-      if (message.includes('held by') || message.includes('offline')) {
-        setReadOnlyMode(true);
-        setCenterStatus(`Center 拒绝调试锁，已进入只读状态：${message}`);
-        setActiveView('terminal');
-        return;
-      }
-      updateSlaveSession(renewSessionLock(session, currentUser));
-      setReadOnlyMode(false);
-      setCenterStatus('Center 锁接口暂不可用，已进入本地调试锁预览模式');
+      if (handleUnauthorized(err)) return;
+      const message = messageFromError(err);
+      setReadOnlyMode(true);
+      setCenterStatus(`Center 拒绝调试锁，已进入只读状态：${message}`);
     }
 
     setActiveView('terminal');
@@ -121,17 +160,17 @@ export function App() {
     }
 
     try {
-      const releasedSession = await releaseSlave(slaveId, currentUser);
+      const releasedSession = await releaseSlave(slaveId);
       updateSlaveSession(releasedSession);
       setCenterStatus(`${session?.name || slaveId} 已释放，其他人可以连接调试。`);
     } catch (err) {
-      const message = err instanceof Error ? err.message : String(err);
-      setCenterStatus(`释放 ${session?.name || slaveId} 失败：${message}`);
+      if (handleUnauthorized(err)) return;
+      setCenterStatus(`释放 ${session?.name || slaveId} 失败：${messageFromError(err)}`);
       try {
         const liveSessions = await listSlaves();
         setSlaveSessions(liveSessions);
       } catch {
-        // 保留原错误文案，避免用刷新失败覆盖真正的释放失败。
+        // Keep the release failure visible.
       }
     }
   }
@@ -140,7 +179,7 @@ export function App() {
     const session = slaveSessions.find((item) => item.slaveId === slaveId);
     if (!session) return;
     try {
-      const taken = await forceTakeover(slaveId, currentUser, reason.trim());
+      const taken = await forceTakeover(slaveId, reason.trim());
       updateSlaveSession(taken);
       setCenterStatus(`已强制接管 ${session.name}（原持有人 ${session.holder || '无'}）。`);
       setActiveSlaveId(slaveId);
@@ -148,15 +187,29 @@ export function App() {
       setReadOnlyMode(false);
       setActiveView('terminal');
     } catch (err) {
-      const message = err instanceof Error ? err.message : String(err);
-      setCenterStatus(`强制接管 ${session.name} 失败：${message}`);
+      if (handleUnauthorized(err)) return;
+      setCenterStatus(`强制接管 ${session.name} 失败：${messageFromError(err)}`);
     }
   }
 
-  function changeCurrentUser(next: string) {
-    const value = next.trim() || 'Humphrey';
-    sessionStorage.setItem('swr-user', value);
-    setCurrentUser(value);
+  if (!authChecked) {
+    return (
+      <main className="login-shell">
+        <section className="login-panel">
+          <div className="login-brand">
+            <span className="brand-mark">SR</span>
+            <div>
+              <strong>smartWebRide</strong>
+              <small>正在恢复登录状态</small>
+            </div>
+          </div>
+        </section>
+      </main>
+    );
+  }
+
+  if (!authUser) {
+    return <LoginView onLogin={handleLogin} />;
   }
 
   return (
@@ -174,16 +227,16 @@ export function App() {
           <Server size={17} />
           <span>{activeView === 'slaves' ? '选择调试环境' : 'Web SSH Terminal'}</span>
         </div>
-        <div className="entry-user">
+        <div className="entry-user account-summary">
           <UserRound size={16} />
-          <label>本地账号：
-            <input
-              className="user-input"
-              value={currentUser}
-              onChange={(event) => changeCurrentUser(event.target.value)}
-              aria-label="当前账号"
-            />
-          </label>
+          <span>
+            <strong>{authUser.displayName}</strong>
+            <small>{authUser.email}</small>
+          </span>
+          <button className="secondary-button compact" onClick={() => void handleLogout()} type="button">
+            <LogOut size={15} />
+            退出
+          </button>
         </div>
       </header>
 
