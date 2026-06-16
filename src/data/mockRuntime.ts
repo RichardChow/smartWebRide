@@ -1,4 +1,4 @@
-import type { ExecutionNode, SlaveSession } from '../types';
+import type { EnvironmentStatus, ExecutionNode, SlaveSession } from '../types';
 
 const now = Date.now();
 
@@ -131,3 +131,74 @@ export const executionNodes: ExecutionNode[] = slaveSessions.map((session) => ({
   lockUntil: session.expiresAt,
   lastRun: session.activeRunId || '暂无真实执行'
 }));
+
+export const environmentStatuses: EnvironmentStatus[] = [
+  {
+    environmentId: '233_setup',
+    jobName: '233_setup',
+    displayName: 'AT Regression 233',
+    testBedIp: '172.18.98.233',
+    envFile: '233_trex_env.xlsx',
+    neDevices: [
+      { ip: '200.200.18.101', type: 'NPT1800' },
+      { ip: '200.200.13.132', type: 'NPT1300' },
+      { ip: '200.200.122.201', type: 'NPT1022' },
+      { ip: '200.200.15.150', type: 'NPT1050i' }
+    ],
+    status: 'jenkins_running',
+    severity: 'busy',
+    summary: 'Jenkins build is running in the office sample signal.',
+    updatedAt: minutesAgo(0),
+    signals: [
+      { source: 'jenkins', status: 'busy', severity: 'busy', summary: '233_setup build is running.', detail: { buildNumber: 395 } },
+      { source: 'robot', status: 'warning', severity: 'warning', summary: 'Manual Robot process looks stale.', detail: { cwd: '/root/debug/tyl_debug' } }
+    ],
+    neSessions: [
+      { targetIp: '200.200.18.101', user: 'admin', sourceIp: '172.18.98.119', protocol: 'ssh', since: '', raw: '' }
+    ]
+  },
+  {
+    environmentId: '234_setup',
+    jobName: '234_setup',
+    displayName: 'AT Regression 234',
+    testBedIp: '172.18.98.234',
+    envFile: '234_trex_env.xlsm',
+    neDevices: [
+      { ip: '200.200.125.129', type: 'NPT1250' },
+      { ip: '200.200.24.224', type: 'NPT2400A' },
+      { ip: '200.200.105.151', type: 'NPT1050i' },
+      { ip: '200.200.112.213', type: 'NPT1012D' }
+    ],
+    status: 'free',
+    severity: 'free',
+    summary: 'No active sample signal detected.',
+    updatedAt: minutesAgo(2),
+    signals: [
+      { source: 'jenkins', status: 'free', severity: 'free', summary: 'Jenkins is idle.', detail: {} },
+      { source: 'robot', status: 'free', severity: 'free', summary: 'Robot process is absent.', detail: {} }
+    ],
+    neSessions: []
+  },
+  {
+    environmentId: '249_setup',
+    jobName: '249_setup',
+    displayName: 'AT Regression 249',
+    testBedIp: '172.18.98.249',
+    envFile: '249_breakout_env.xlsx',
+    neDevices: [
+      { ip: '200.200.23.231', type: 'NPT2300' },
+      { ip: '200.200.21.210', type: 'NPT2100A' },
+      { ip: '200.200.122.209', type: 'NPT1022B' },
+      { ip: '200.200.11.114', type: 'NPT1100' }
+    ],
+    status: 'unknown',
+    severity: 'unknown',
+    summary: 'Office probe is not configured in local preview.',
+    updatedAt: minutesAgo(5),
+    signals: [
+      { source: 'jenkins', status: 'unknown', severity: 'unknown', summary: 'Jenkins probe is not configured.', detail: {} },
+      { source: 'ne', status: 'unknown', severity: 'unknown', summary: 'NE session probe is not configured.', detail: {} }
+    ],
+    neSessions: []
+  }
+];

@@ -3,6 +3,53 @@ from __future__ import annotations
 from pydantic import BaseModel, Field
 
 
+class EnvironmentDevice(BaseModel):
+    ip: str
+    type: str = ""
+
+
+class EnvironmentConfig(BaseModel):
+    environmentId: str
+    jobName: str
+    displayName: str = ""
+    testBedIp: str
+    envFile: str
+    slaveId: str = ""
+    neDevices: list[EnvironmentDevice] = Field(default_factory=list)
+
+
+class EnvironmentSignal(BaseModel):
+    source: str
+    status: str
+    severity: str = "unknown"
+    summary: str = ""
+    detail: dict = Field(default_factory=dict)
+
+
+class EnvironmentSession(BaseModel):
+    targetIp: str
+    user: str = ""
+    sourceIp: str = ""
+    protocol: str = ""
+    since: str = ""
+    raw: str = ""
+
+
+class EnvironmentStatus(BaseModel):
+    environmentId: str
+    jobName: str
+    displayName: str
+    testBedIp: str
+    envFile: str
+    neDevices: list[EnvironmentDevice] = Field(default_factory=list)
+    status: str
+    severity: str
+    summary: str
+    updatedAt: str
+    signals: list[EnvironmentSignal] = Field(default_factory=list)
+    neSessions: list[EnvironmentSession] = Field(default_factory=list)
+
+
 class SlaveCapabilities(BaseModel):
     browseRobotRoot: bool = True
     runRobot: bool = True

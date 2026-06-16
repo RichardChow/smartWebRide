@@ -1,10 +1,11 @@
 import { Activity, RadioTower, Server, TerminalSquare } from 'lucide-react';
 import heroImage from '../assets/smartwebride-hero-candidate-20260609.png';
-import type { SlaveSession } from '../types';
+import type { EnvironmentStatus, SlaveSession } from '../types';
 import { SlaveStatusHome } from './SlaveStatusHome';
 
 interface HomeHeroPreviewProps {
   sessions: SlaveSession[];
+  environmentStatuses?: EnvironmentStatus[];
   currentUser: string;
   statusMessage?: string;
   onEnterSlave: (slaveId: string, readOnly: boolean) => void;

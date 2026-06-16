@@ -123,6 +123,54 @@ export interface SlaveSession {
   };
 }
 
+export type EnvironmentOccupancyStatus =
+  | 'free'
+  | 'jenkins_running'
+  | 'manual_robot_active'
+  | 'manual_robot_stale'
+  | 'login_only'
+  | 'smartwebride_held'
+  | 'unknown';
+
+export type EnvironmentSeverity = 'free' | 'warning' | 'busy' | 'unknown';
+
+export interface EnvironmentDevice {
+  ip: string;
+  type: string;
+}
+
+export interface EnvironmentSignal {
+  source: string;
+  status: 'free' | 'busy' | 'warning' | 'unknown';
+  severity: EnvironmentSeverity;
+  summary: string;
+  detail: Record<string, unknown>;
+}
+
+export interface EnvironmentSession {
+  targetIp: string;
+  user: string;
+  sourceIp: string;
+  protocol: string;
+  since: string;
+  raw: string;
+}
+
+export interface EnvironmentStatus {
+  environmentId: string;
+  jobName: string;
+  displayName: string;
+  testBedIp: string;
+  envFile: string;
+  neDevices: EnvironmentDevice[];
+  status: EnvironmentOccupancyStatus;
+  severity: EnvironmentSeverity;
+  summary: string;
+  updatedAt: string;
+  signals: EnvironmentSignal[];
+  neSessions: EnvironmentSession[];
+}
+
 export interface AuthUser {
   email: string;
   displayName: string;

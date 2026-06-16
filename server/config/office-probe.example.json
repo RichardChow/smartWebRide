@@ -1,0 +1,47 @@
+{
+  "timeoutSeconds": 5,
+  "jenkins": {
+    "baseUrl": "http://10.91.90.109:8080/jenkins",
+    "jobUrlTemplate": "{baseUrl}/job/{jobName}/lastBuild/api/json?tree=building,result,number,displayName,url",
+    "userEnv": "SWR_JENKINS_USER",
+    "tokenEnv": "SWR_JENKINS_TOKEN"
+  },
+  "robot": {
+    "argv": [
+      "ssh",
+      "-o",
+      "BatchMode=yes",
+      "-o",
+      "StrictHostKeyChecking=yes",
+      "-o",
+      "ConnectionAttempts=1",
+      "-o",
+      "PasswordAuthentication=no",
+      "-o",
+      "KbdInteractiveAuthentication=no",
+      "-o",
+      "ConnectTimeout=3",
+      "root@{testBedIp}",
+      "ps -eo pid,etime,args | grep -E '[r]obot|python.*robot'"
+    ]
+  },
+  "ne": {
+    "argv": [
+      "ssh",
+      "-o",
+      "BatchMode=yes",
+      "-o",
+      "StrictHostKeyChecking=yes",
+      "-o",
+      "ConnectionAttempts=1",
+      "-o",
+      "PasswordAuthentication=no",
+      "-o",
+      "KbdInteractiveAuthentication=no",
+      "-o",
+      "ConnectTimeout=3",
+      "root@{testBedIp}",
+      "ss -tn | grep -E '{neIpRegex}'"
+    ]
+  }
+}

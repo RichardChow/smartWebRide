@@ -17,6 +17,9 @@ docs/
 rules/
 server/config/slaves.json
 server/config/users.json
+server/config/environments.json
+server/config/office-probe.json
+server/config/office-probe.env
 scripts/swr-restart-vm*.sh
 *.log
 *.pid

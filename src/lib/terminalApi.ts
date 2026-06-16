@@ -1,4 +1,4 @@
-import type { AuthUser, SlaveSession } from '../types';
+import type { AuthUser, EnvironmentStatus, SlaveSession } from '../types';
 
 function defaultApiBase(): string {
   return `${window.location.protocol}//${window.location.hostname}:8008/api`;
@@ -120,6 +120,10 @@ export async function logout(): Promise<void> {
 
 export async function listSlaves(): Promise<SlaveSession[]> {
   return fetchJson<SlaveSession[]>(`${API_BASE}/slaves`);
+}
+
+export async function listEnvironmentStatuses(): Promise<EnvironmentStatus[]> {
+  return fetchJson<EnvironmentStatus[]>(`${API_BASE}/environments`);
 }
 
 export async function lockSlave(slaveId: string, manualHoldReason: string): Promise<SlaveSession> {

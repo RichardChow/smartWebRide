@@ -1,0 +1,46 @@
+{
+  "environments": [
+    {
+      "environmentId": "233_setup",
+      "jobName": "233_setup",
+      "displayName": "AT Regression 233",
+      "testBedIp": "172.18.98.233",
+      "envFile": "233_trex_env.xlsx",
+      "slaveId": "233",
+      "neDevices": [
+        { "ip": "200.200.18.101", "type": "NPT1800" },
+        { "ip": "200.200.13.132", "type": "NPT1300" },
+        { "ip": "200.200.122.201", "type": "NPT1022" },
+        { "ip": "200.200.15.150", "type": "NPT1050i" }
+      ]
+    },
+    {
+      "environmentId": "234_setup",
+      "jobName": "234_setup",
+      "displayName": "AT Regression 234",
+      "testBedIp": "172.18.98.234",
+      "envFile": "234_trex_env.xlsm",
+      "slaveId": "234",
+      "neDevices": [
+        { "ip": "200.200.125.129", "type": "NPT1250" },
+        { "ip": "200.200.24.224", "type": "NPT2400A" },
+        { "ip": "200.200.105.151", "type": "NPT1050i" },
+        { "ip": "200.200.112.213", "type": "NPT1012D" }
+      ]
+    },
+    {
+      "environmentId": "249_setup",
+      "jobName": "249_setup",
+      "displayName": "AT Regression 249",
+      "testBedIp": "172.18.98.249",
+      "envFile": "249_breakout_env.xlsx",
+      "slaveId": "249",
+      "neDevices": [
+        { "ip": "200.200.23.231", "type": "NPT2300" },
+        { "ip": "200.200.21.210", "type": "NPT2100A" },
+        { "ip": "200.200.122.209", "type": "NPT1022B" },
+        { "ip": "200.200.11.114", "type": "NPT1100" }
+      ]
+    }
+  ]
+}

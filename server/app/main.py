@@ -18,7 +18,8 @@ from .auth import (
     session_id_from_cookie_header,
     session_ttl_seconds,
 )
-from .models import AuthUserResponse, FileListResponse, FileMkdirRequest, FileReadResponse, FileWriteRequest, LockRequest, LoginRequest, SlaveInfo, TakeoverRequest, TerminalSessionResponse
+from .environment_status import EnvironmentStatusService
+from .models import AuthUserResponse, EnvironmentStatus, FileListResponse, FileMkdirRequest, FileReadResponse, FileWriteRequest, LockRequest, LoginRequest, SlaveInfo, TakeoverRequest, TerminalSessionResponse
 from .slave_registry import SlaveRegistry
 
 ACTIVITY_POLL_INTERVAL = 12
@@ -40,6 +41,7 @@ app.add_middleware(
 registry = SlaveRegistry()
 hub = AgentHub()
 auth_service = AuthService()
+environment_status_service = EnvironmentStatusService()
 
 # 内存态审计（重启即丢，MVP 足够）：记录强制接管等高影响操作。
 AUDIT: list[dict] = []
@@ -144,6 +146,11 @@ async def list_slaves(_user: AuthenticatedUser = Depends(get_current_user)) -> l
     return registry.list_slaves()
 
 
+@app.get("/api/environments", response_model=list[EnvironmentStatus])
+async def list_environment_statuses(_user: AuthenticatedUser = Depends(get_current_user)) -> list[EnvironmentStatus]:
+    return environment_status_service.list_statuses(registry)
+
+
 async def _refresh_slave_activity(slave_id: str) -> SlaveInfo | None:
     try:
         result = await hub.activity_request(slave_id) if hub.is_online(slave_id) else {"robotRunning": False}
@@ -156,11 +163,13 @@ async def _refresh_slave_activity(slave_id: str) -> SlaveInfo | None:
 @app.post("/api/slaves/{slave_id}/lock", response_model=SlaveInfo)
 async def lock_slave(slave_id: str, request: LockRequest, user: AuthenticatedUser = Depends(get_current_user)) -> SlaveInfo:
     try:
-        return registry.lock(slave_id, user.display_name, user.email, request.manualHoldReason)
+        slave = registry.lock(slave_id, user.display_name, user.email, request.manualHoldReason)
     except KeyError:
         raise HTTPException(status_code=404, detail="slave not found")
     except ValueError as exc:
         raise HTTPException(status_code=409, detail=str(exc))
+    environment_status_service.invalidate_cache()
+    return slave
 
 
 @app.delete("/api/slaves/{slave_id}/lock", response_model=SlaveInfo)
@@ -173,6 +182,7 @@ async def unlock_slave(slave_id: str, user: AuthenticatedUser = Depends(get_curr
         raise HTTPException(status_code=409, detail=str(exc))
     # 释放 = 放弃该 slave：拆掉其全部 PTY，维持单写者不变量。
     await hub.close_slave_sessions(slave_id)
+    environment_status_service.invalidate_cache()
     return slave
 
 
@@ -203,6 +213,7 @@ async def takeover_slave(slave_id: str, request: TakeoverRequest, user: Authenti
         "reason": takeover_reason,
         "wasRunning": was_running,
     })
+    environment_status_service.invalidate_cache()
     return slave
 
 

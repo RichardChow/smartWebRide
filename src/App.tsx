@@ -4,10 +4,10 @@ import { HomeHeroPreview } from './components/HomeHeroPreview';
 import { LoginView } from './components/LoginView';
 import { SlaveStatusHome } from './components/SlaveStatusHome';
 import { TerminalView } from './components/TerminalView';
-import { slaveSessions as initialSlaveSessions } from './data/mockRuntime';
-import { ApiError, forceTakeover, getCurrentUser, listSlaves, lockSlave, login, logout, releaseSlave } from './lib/terminalApi';
+import { environmentStatuses as initialEnvironmentStatuses, slaveSessions as initialSlaveSessions } from './data/mockRuntime';
+import { ApiError, forceTakeover, getCurrentUser, listEnvironmentStatuses, listSlaves, lockSlave, login, logout, releaseSlave } from './lib/terminalApi';
 import { canOpenWritableTerminal } from './lib/terminalLogic';
-import type { AppView, AuthUser, SlaveSession } from './types';
+import type { AppView, AuthUser, EnvironmentStatus, SlaveSession } from './types';
 
 function messageFromError(err: unknown): string {
   return err instanceof Error ? err.message : String(err);
@@ -19,6 +19,7 @@ export function App() {
   const [authChecked, setAuthChecked] = useState(false);
   const [activeView, setActiveView] = useState<AppView>('slaves');
   const [slaveSessions, setSlaveSessions] = useState<SlaveSession[]>(initialSlaveSessions);
+  const [environmentStatuses, setEnvironmentStatuses] = useState<EnvironmentStatus[]>(initialEnvironmentStatuses);
   const [activeSlaveId, setActiveSlaveId] = useState(initialSlaveSessions[0]?.slaveId ?? '');
   const [readOnlyMode, setReadOnlyMode] = useState(false);
   const [terminalMounted, setTerminalMounted] = useState(false);
@@ -31,7 +32,8 @@ export function App() {
     [activeSlaveId, slaveSessions]
   );
 
-  function updateSlaveSession(nextSession: SlaveSession) {
+  function updateSlaveSession(nextSession: SlaveSession | undefined) {
+    if (!nextSession?.slaveId) return;
     setSlaveSessions((current) => current.map((session) => (session.slaveId === nextSession.slaveId ? nextSession : session)));
   }
 
@@ -79,9 +81,17 @@ export function App() {
         const liveSessions = await listSlaves();
         if (cancelled) return;
         setSlaveSessions(liveSessions);
-        setCenterStatus('Center 在线，Slave 状态来自真实 Agent 心跳');
         if (liveSessions.length > 0 && !liveSessions.some((session) => session.slaveId === activeSlaveId)) {
           setActiveSlaveId(liveSessions[0].slaveId);
+        }
+        try {
+          const liveEnvironmentStatuses = await listEnvironmentStatuses();
+          if (cancelled) return;
+          setEnvironmentStatuses(liveEnvironmentStatuses);
+          setCenterStatus('Center 在线，Slave 状态来自真实 Agent 心跳');
+        } catch (environmentErr) {
+          if (cancelled) return;
+          setCenterStatus(`Center 在线，Slave 状态来自真实 Agent 心跳；环境状态使用本地示例：${messageFromError(environmentErr)}`);
         }
       } catch (err) {
         if (cancelled) return;
@@ -245,6 +255,7 @@ export function App() {
           {isHomeHeroPreview ? (
             <HomeHeroPreview
               sessions={slaveSessions}
+              environmentStatuses={environmentStatuses}
               currentUser={currentUser}
               statusMessage={centerStatus}
               onEnterSlave={enterSlave}
@@ -254,6 +265,7 @@ export function App() {
           ) : (
             <SlaveStatusHome
               sessions={slaveSessions}
+              environmentStatuses={environmentStatuses}
               currentUser={currentUser}
               statusMessage={centerStatus}
               onEnterSlave={enterSlave}

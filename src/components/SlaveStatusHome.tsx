@@ -1,10 +1,12 @@
 import { Activity, Eye, Lock, LogOut, Play, RotateCw, Server, ShieldAlert, ShieldCheck, WifiOff } from 'lucide-react';
 import { useState, type ReactNode } from 'react';
 import { canOpenWritableTerminal } from '../lib/terminalLogic';
-import type { SlaveSession } from '../types';
+import type { EnvironmentStatus, SlaveSession } from '../types';
+import { EnvironmentStatusPanel } from './EnvironmentStatusPanel';
 
 interface SlaveStatusHomeProps {
   sessions: SlaveSession[];
+  environmentStatuses?: EnvironmentStatus[];
   currentUser: string;
   statusMessage?: string;
   hideCommandBand?: boolean;
@@ -102,7 +104,7 @@ function FieldLine({ label, value }: { label: string; value: ReactNode }) {
   );
 }
 
-export function SlaveStatusHome({ sessions, currentUser, statusMessage, hideCommandBand = false, onEnterSlave, onReleaseSlave, onForceTakeover }: SlaveStatusHomeProps) {
+export function SlaveStatusHome({ sessions, environmentStatuses = [], currentUser, statusMessage, hideCommandBand = false, onEnterSlave, onReleaseSlave, onForceTakeover }: SlaveStatusHomeProps) {
   const [takeoverTarget, setTakeoverTarget] = useState<SlaveSession | null>(null);
   const [takeoverReason, setTakeoverReason] = useState('');
 
@@ -149,6 +151,8 @@ export function SlaveStatusHome({ sessions, currentUser, statusMessage, hideComm
       )}
 
       {statusMessage ? <p className="slave-center-status">{statusMessage}</p> : null}
+
+      <EnvironmentStatusPanel statuses={environmentStatuses} />
 
       <section className="slave-board" aria-label="Slave 状态列表">
         <div className="slave-list">

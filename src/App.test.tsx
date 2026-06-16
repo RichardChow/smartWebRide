@@ -17,6 +17,7 @@ const apiMocks = vi.hoisted(() => {
     ApiError,
     forceTakeover: vi.fn(),
     getCurrentUser: vi.fn(),
+    listEnvironmentStatuses: vi.fn(),
     listSlaves: vi.fn(),
     lockSlave: vi.fn(),
     login: vi.fn(),
@@ -122,6 +123,7 @@ describe('App auth and slave flows', () => {
     vi.clearAllMocks();
     window.history.pushState(null, '', '/');
     apiMocks.getCurrentUser.mockResolvedValue(humphrey);
+    apiMocks.listEnvironmentStatuses.mockResolvedValue([]);
   });
 
   it('renders login form when unauthenticated and logs in with email/password', async () => {
